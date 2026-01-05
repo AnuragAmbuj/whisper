@@ -27,7 +27,8 @@ final class Book {
 
   var bookDir: URL? {
     guard format == .epub || format == .comic else { return url }
-    guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
+    guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+    else { return nil }
     return docs.appendingPathComponent("Books").appendingPathComponent(id.uuidString)
   }
 
@@ -46,6 +47,26 @@ final class Book {
     self.format = format
     self.url = url
     self.sampleImages = sampleImages
+  }
+
+  /// Deletes all files associated with this book (EPUB directory, cover image)
+  func cleanupFiles() {
+    let fileManager = FileManager.default
+
+    // Delete extracted book directory
+    if let dir = bookDir {
+      try? fileManager.removeItem(at: dir)
+      print("Book: Deleted directory at \(dir.path)")
+    }
+
+    // Delete cover image
+    if !coverImageName.isEmpty {
+      if let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first {
+        let coverURL = docs.appendingPathComponent(coverImageName)
+        try? fileManager.removeItem(at: coverURL)
+        print("Book: Deleted cover at \(coverURL.path)")
+      }
+    }
   }
 }
 
