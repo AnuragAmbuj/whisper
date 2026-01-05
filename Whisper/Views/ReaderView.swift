@@ -63,7 +63,7 @@ struct ReaderView: View {
 
       case .epub:
         if let bookDir = viewModel.book.bookDir {
-          EpubReaderView(bookDir: bookDir)
+          EpubReaderView(bookDir: bookDir, theme: viewModel.theme, fontSize: viewModel.fontSize)
         } else {
           ContentUnavailableView("EPUB Not Found", systemImage: "book.closed")
         }
@@ -107,7 +107,9 @@ struct ReaderView: View {
               Image(systemName: viewModel.isBookmarked ? "bookmark.fill" : "bookmark")
               .foregroundColor(.white)
             }
-            Button(action: { withAnimation(.easeInOut(duration: DS.Animation.normal)) { showSettings.toggle() } }) {
+            Button(action: {
+              withAnimation(.easeInOut(duration: DS.Animation.normal)) { showSettings.toggle() }
+            }) {
               Image(systemName: "textformat.size")
               .foregroundColor(.white)
             }
@@ -128,7 +130,9 @@ struct ReaderView: View {
             Button(action: { viewModel.toggleBookmark() }) {
               Image(systemName: viewModel.isBookmarked ? "bookmark.fill" : "bookmark")
             }
-            Button(action: { withAnimation(.easeInOut(duration: DS.Animation.normal)) { showSettings.toggle() } }) {
+            Button(action: {
+              withAnimation(.easeInOut(duration: DS.Animation.normal)) { showSettings.toggle() }
+            }) {
               Image(systemName: "textformat.size")
             }
           }
