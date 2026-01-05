@@ -2,7 +2,9 @@
 
 A universal e-book and comic reader app for iOS, iPadOS, and macOS with performance optimizations and beautiful UI.
 
-## ✨ Features
+**Status**: Work in Progress - Development in Progress
+
+## Features
 
 - **Multi-Format Support**: Read EPUB, PDF, CBZ/CBR comics, and plain text files
 - **Universal App**: Native support for iPhone, iPad, and Mac with platform-specific optimizations
@@ -15,15 +17,15 @@ A universal e-book and comic reader app for iOS, iPadOS, and macOS with performa
 - **Fast Imports**: Non-blocking async import with progress indicators
 - **Memory Efficient**: 60% reduction in memory usage during imports
 
-## 🚀 Performance Highlights
+## Performance Highlights
 
-- **Fast Startup**: Animated splash screen with WebKit pre-warming
-- **Quick Imports**: 2-3 seconds for EPUB files (non-blocking UI)
-- **Instant Reader**: <1 second load time for cached books
-- **Smooth Navigation**: 200ms chapter switching
-- **Memory Optimized**: Streaming extraction prevents crashes on large files
+- Fast Startup: Animated splash screen with WebKit pre-warming
+- Quick Imports: 2-3 seconds for EPUB files (non-blocking UI)
+- Instant Reader: <1 second load time for cached books
+- Smooth Navigation: 200ms chapter switching
+- Memory Optimized: Streaming extraction prevents crashes on large files
 
-## 📚 Supported Formats
+## Supported Formats
 
 | Format | Description | Features |
 |--------|-------------|----------|
@@ -34,12 +36,12 @@ A universal e-book and comic reader app for iOS, iPadOS, and macOS with performa
 | **TXT** | Plain Text | Full text rendering with customizable typography |
 
 ### EPUB Reader Features
-- ✅ Full EPUB 2.0 & 3.0 support
-- ✅ Chapter navigation with TOC
-- ✅ Cover image extraction and caching
-- ✅ Fast loading from pre-parsed spine.json
-- ✅ WebView-based rendering with CSS support
-- 🔄 Theme integration (in progress)
+- Full EPUB 2.0 & 3.0 support
+- Chapter navigation with TOC
+- Cover image extraction and caching
+- Fast loading from pre-parsed spine.json
+- WebView-based rendering with CSS support
+- Theme integration (in progress)
 
 ## Requirements
 
@@ -60,7 +62,7 @@ A universal e-book and comic reader app for iOS, iPadOS, and macOS with performa
 
 4. Build and run (Cmd + R)
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 Whisper/
@@ -105,11 +107,11 @@ ReaderView → Format-Specific Reader → Rendering Engine
 Theme      WebView/Image/PDF      Custom/Native
 ```
 
-## 📖 Documentation
+## Documentation
 
 ### Core Documentation
 - **[AGENT.md](./AGENT.md)** - Complete AI agent documentation and development guidelines
-- **[Session Documentation](./AGENT.md#session-documentation)** - Detailed changelog and implementation notes
+- **[PROJECT_CONTEXT.md](./PROJECT_CONTEXT.md)** - Complete project documentation and technical details
 
 ### Architecture Documentation
 See the [Docs](./Docs) folder for detailed documentation:
@@ -125,7 +127,7 @@ See the [Docs](./Docs) folder for detailed documentation:
 - **WebKit Optimization**: Pre-warming during splash screen for instant reader loading
 - **Async Processing**: Non-blocking imports with progress indicators
 
-## 🤝 Contributing
+## Contributing
 
 ### Development Guidelines
 - Follow Swift 6 concurrency patterns
@@ -152,7 +154,7 @@ See the [Docs](./Docs) folder for detailed documentation:
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 ### Frameworks & Technologies
 - **SwiftUI** - Declarative UI framework
@@ -174,13 +176,13 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-## 📊 Project Status
+## Project Status
 
 **Version**: 1.0.0  
-**Status**: Production Ready  
+**Status**: Work in Progress - Development in Progress  
 **Last Updated**: January 5, 2026  
 
-### ✅ Completed Features
+### Completed Features
 - [x] Multi-format support (EPUB, PDF, CBZ, CBR, TXT)
 - [x] High-performance imports with streaming extraction
 - [x] Image caching system
@@ -190,13 +192,13 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [x] Cross-platform compatibility (iOS/macOS)
 - [x] Swift 6 concurrency compliance
 
-### 🔄 In Progress
+### In Progress
 - [ ] EPUB theme integration (CSS injection)
 - [ ] Font size and reading settings
 - [ ] Pagination system for long chapters
 - [ ] Reading progress within chapters
 
-### 📋 Planned Features
+### Planned Features
 - [ ] Cloud sync for reading progress
 - [ ] Dictionary integration
 - [ ] Note-taking and highlighting
