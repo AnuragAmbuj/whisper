@@ -39,6 +39,6 @@ struct TextReaderView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .background(theme.adaptiveBackground)
+        .background(theme.backgroundColor)
     }
 }

@@ -10,14 +10,12 @@ import SwiftUI
 import SwiftData
 
 @Observable
-class ReaderViewModel: ObservableObject {
-    @Published var book: Book
-    var theme: AppTheme = .default
+class ReaderViewModel {
+    var book: Book
+    var theme: AppTheme
     var fontSize: Double = 18.0
     var lineHeight: CGFloat = 1.8
     var isBookmarked: Bool = false
-    
-    var theme: AppTheme = AppTheme()
     
     private let keyThemeStyle = "reader_theme_style"
     private let keyFontSize = "reader_fontSize"
@@ -25,6 +23,7 @@ class ReaderViewModel: ObservableObject {
     
     init(book: Book) {
         self.book = book
+        self.theme = AppTheme()
         loadSettings()
     }
     
@@ -32,23 +31,32 @@ class ReaderViewModel: ObservableObject {
         if let styleString = UserDefaults.standard.string(forKey: keyThemeStyle),
            let style = AppTheme.ThemeStyle(rawValue: styleString) {
             theme = AppTheme(style: style)
-        } else {
-            theme = AppTheme()
         }
         
-        theme.fontSize = UserDefaults.standard.double(forKey: keyFontSize)
-        if theme.fontSize == 0 { theme.fontSize = 18.0 }
+        let savedFontSize = UserDefaults.standard.double(forKey: keyFontSize)
+        if savedFontSize > 0 {
+            fontSize = savedFontSize
+            theme.fontSize = savedFontSize
+        }
         
-        theme.lineHeight = UserDefaults.standard.double(forKey: keyLineHeight) ?? 1.8
+        let savedLineHeight = UserDefaults.standard.double(forKey: keyLineHeight)
+        if savedLineHeight > 0 {
+            lineHeight = savedLineHeight
+            theme.lineHeight = savedLineHeight
+        }
     }
     
-    // MARK: - Progress Management
+    private func saveSettings() {
+        UserDefaults.standard.set(theme.style.rawValue, forKey: keyThemeStyle)
+        UserDefaults.standard.set(fontSize, forKey: keyFontSize)
+        UserDefaults.standard.set(lineHeight, forKey: keyLineHeight)
+    }
+    
     func updateProgress(_ newProgress: Double) {
         book.progress = newProgress
         book.lastReadDate = Date()
     }
     
-    // MARK: - Theme Management
     func toggleTheme() {
         switch theme.style {
         case .default:
@@ -56,13 +64,46 @@ class ReaderViewModel: ObservableObject {
         case .dark:
             theme = AppTheme(style: .sepia)
         case .sepia:
-            theme = AppTheme(style: .default)
+            theme = AppTheme(style: .light)
         case .light:
             theme = AppTheme(style: .default)
         }
+        theme.fontSize = fontSize
+        theme.lineHeight = lineHeight
+        saveSettings()
     }
     
-    // MARK: - Bookmark Management
+    func setTheme(_ style: AppTheme.ThemeStyle) {
+        theme = AppTheme(style: style)
+        theme.fontSize = fontSize
+        theme.lineHeight = lineHeight
+        saveSettings()
+    }
+    
+    func increaseFontSize() {
+        fontSize = min(fontSize + 2, 32)
+        theme.fontSize = fontSize
+        saveSettings()
+    }
+    
+    func decreaseFontSize() {
+        fontSize = max(fontSize - 2, 12)
+        theme.fontSize = fontSize
+        saveSettings()
+    }
+    
+    func increaseLineHeight() {
+        lineHeight = min(lineHeight + 0.2, 3.0)
+        theme.lineHeight = lineHeight
+        saveSettings()
+    }
+    
+    func decreaseLineHeight() {
+        lineHeight = max(lineHeight - 0.2, 1.0)
+        theme.lineHeight = lineHeight
+        saveSettings()
+    }
+    
     func toggleBookmark() {
         guard !isBookmarked else { return }
         

@@ -29,7 +29,7 @@ struct ReaderView: View {
       switch viewModel.book.format {
       case .text:
         TextReaderView(
-          book: viewModel.book, viewModel: viewModel, theme: viewModel.theme,
+          book: viewModel.book, theme: viewModel.theme,
           fontSize: viewModel.fontSize, lineHeight: viewModel.lineHeight)
 
       case .pdf:
@@ -62,9 +62,8 @@ struct ReaderView: View {
         }
 
       case .epub:
-        if let url = viewModel.book.url {
-          // url points to the unzipped directory
-          EpubReaderView(bookDir: url)
+        if let bookDir = viewModel.book.bookDir {
+          EpubReaderView(bookDir: bookDir)
         } else {
           ContentUnavailableView("EPUB Not Found", systemImage: "book.closed")
         }

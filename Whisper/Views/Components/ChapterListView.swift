@@ -37,9 +37,15 @@ struct ChapterListView: View {
       }
       .navigationTitle("Table of Contents")
       .toolbar {
+        #if os(iOS)
         ToolbarItem(placement: .topBarTrailing) {
           Button("Close") { isPresented = false }
         }
+        #else
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Close") { isPresented = false }
+        }
+        #endif
       }
       .onAppear(perform: loadTOC)
       .overlay {

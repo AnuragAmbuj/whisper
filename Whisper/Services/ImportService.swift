@@ -9,7 +9,6 @@ import PDFKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Import errors for user feedback
 enum ImportError: Error, LocalizedError {
     case fileNotFound
     case copyFailed
@@ -18,28 +17,22 @@ enum ImportError: Error, LocalizedError {
     
     var errorDescription: String? {
         switch self {
-        case .fileNotFound:
-            return "File not found"
-        case .copyFailed:
-            return "Failed to copy file"
-        case .unsupportedFormat:
-            return "Unsupported file format"
-        case .parseFailed(let message):
-            return "Import failed: \(message)"
+        case .fileNotFound: return "File not found"
+        case .copyFailed: return "Failed to copy file"
+        case .unsupportedFormat: return "Unsupported file format"
+        case .parseFailed(let message): return "Import failed: \(message)"
         }
     }
 }
 
-/// Unified import service for all supported book formats
-/// Supports: PDF, EPUB, CBZ, CBR, TXT
+@MainActor
 class ImportService {
     static let shared = ImportService()
     
-    /// Supported file types for import
     static let supportedTypes: [UTType] = [
         .pdf,
         .epub,
-        .zip,  // CBZ files often use .zip extension
+        .zip,
         UTType(filenameExtension: "cbz") ?? .zip,
         UTType(filenameExtension: "cbr") ?? .data,
         .plainText
@@ -47,13 +40,7 @@ class ImportService {
     
     private init() {}
     
-    // MARK: - Public API
-    
-    /// Imports a file and returns the created Book object
-    /// - Parameter sourceURL: URL of the file to import
-    /// - Returns: Book object if successful, nil otherwise
-    func importFile(at sourceURL: URL) -> Book? {
-        // Access security scoped resource
+    func importFile(at sourceURL: URL) async -> Book? {
         let accessing = sourceURL.startAccessingSecurityScopedResource()
         defer {
             if accessing { sourceURL.stopAccessingSecurityScopedResource() }
@@ -61,18 +48,15 @@ class ImportService {
         
         let fileManager = FileManager.default
         
-        // Validate file exists
         guard fileManager.fileExists(atPath: sourceURL.path) else {
             print("ImportService: File not found at \(sourceURL.path)")
             return nil
         }
         
-        // Get documents directory
         guard let documentsDir = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
             return nil
         }
         
-        // Create necessary directories
         let booksDir = documentsDir.appendingPathComponent("Books", isDirectory: true)
         let coversDir = documentsDir.appendingPathComponent("Covers", isDirectory: true)
         
@@ -84,32 +68,38 @@ class ImportService {
             return nil
         }
         
-        // Determine format and process accordingly
         let ext = sourceURL.pathExtension.lowercased()
         
         switch ext {
         case "epub":
-            return importEPUB(from: sourceURL, booksDir: booksDir)
-            
+            return await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let book = self.importEPUBSync(from: sourceURL, booksDir: booksDir)
+                    DispatchQueue.main.async {
+                        continuation.resume(returning: book)
+                    }
+                }
+            }
         case "pdf":
-            return importPDF(from: sourceURL, booksDir: booksDir, documentsDir: documentsDir)
-            
+            return importPDFSync(from: sourceURL, booksDir: booksDir, documentsDir: documentsDir)
         case "cbz", "cbr", "zip":
-            return importComic(from: sourceURL, booksDir: booksDir, ext: ext)
-            
+            return await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let book = self.importComicSync(from: sourceURL, booksDir: booksDir)
+                    DispatchQueue.main.async {
+                        continuation.resume(returning: book)
+                    }
+                }
+            }
         case "txt":
-            return importText(from: sourceURL, booksDir: booksDir)
-            
+            return importTextSync(from: sourceURL, booksDir: booksDir)
         default:
             print("ImportService: Unsupported format: \(ext)")
             return nil
         }
     }
     
-    // MARK: - Format-Specific Import Methods
-    
-    private func importEPUB(from sourceURL: URL, booksDir: URL) -> Book? {
-        // Copy to Books directory first
+    private nonisolated func importEPUBSync(from sourceURL: URL, booksDir: URL) -> Book? {
         let destinationURL = booksDir.appendingPathComponent(sourceURL.lastPathComponent)
         
         do {
@@ -123,25 +113,21 @@ class ImportService {
             return nil
         }
         
-        // Use EpubParser
         if let book = EpubParser.shared.parse(sourceURL: destinationURL) {
-            // Delete the copied .epub since EpubParser extracts to its own folder
             try? FileManager.default.removeItem(at: destinationURL)
             return book
         }
         
-        // Fallback if parsing fails
         print("ImportService: EPUB parsing failed")
         try? FileManager.default.removeItem(at: destinationURL)
         return nil
     }
     
-    private func importPDF(from sourceURL: URL, booksDir: URL, documentsDir: URL) -> Book? {
+    private func importPDFSync(from sourceURL: URL, booksDir: URL, documentsDir: URL) -> Book? {
         let fileManager = FileManager.default
         let fileName = sourceURL.lastPathComponent
         let destinationURL = booksDir.appendingPathComponent(fileName)
         
-        // Copy file
         do {
             if fileManager.fileExists(atPath: destinationURL.path) {
                 try fileManager.removeItem(at: destinationURL)
@@ -152,7 +138,6 @@ class ImportService {
             return nil
         }
         
-        // Extract metadata
         var title = sourceURL.deletingPathExtension().lastPathComponent
         var author = "Unknown Author"
         var coverImageName = ""
@@ -161,7 +146,6 @@ class ImportService {
         if let document = PDFDocument(url: destinationURL) {
             pageCount = document.pageCount
             
-            // Extract metadata
             if let metaTitle = document.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String,
                !metaTitle.isEmpty {
                 title = metaTitle
@@ -171,7 +155,6 @@ class ImportService {
                 author = metaAuthor
             }
             
-            // Generate cover thumbnail
             if let page = document.page(at: 0) {
                 coverImageName = generatePDFCover(from: page, documentsDir: documentsDir)
             }
@@ -187,8 +170,7 @@ class ImportService {
         )
     }
     
-    private func importComic(from sourceURL: URL, booksDir: URL, ext: String) -> Book? {
-        // Copy to Books directory first
+    private nonisolated func importComicSync(from sourceURL: URL, booksDir: URL) -> Book? {
         let destinationURL = booksDir.appendingPathComponent(sourceURL.lastPathComponent)
         
         do {
@@ -202,25 +184,21 @@ class ImportService {
             return nil
         }
         
-        // Use ComicParser
         if let book = ComicParser.shared.parse(sourceURL: destinationURL) {
-            // Delete the copied archive since ComicParser extracts to its own folder
             try? FileManager.default.removeItem(at: destinationURL)
             return book
         }
         
-        // Fallback if parsing fails
         print("ImportService: Comic parsing failed")
         try? FileManager.default.removeItem(at: destinationURL)
         return nil
     }
     
-    private func importText(from sourceURL: URL, booksDir: URL) -> Book? {
+    private func importTextSync(from sourceURL: URL, booksDir: URL) -> Book? {
         let fileManager = FileManager.default
         let fileName = sourceURL.lastPathComponent
         let destinationURL = booksDir.appendingPathComponent(fileName)
         
-        // Copy file
         do {
             if fileManager.fileExists(atPath: destinationURL.path) {
                 try fileManager.removeItem(at: destinationURL)
@@ -231,7 +209,6 @@ class ImportService {
             return nil
         }
         
-        // Read content
         let title = sourceURL.deletingPathExtension().lastPathComponent
         var content = "Unable to read content"
         
@@ -248,8 +225,6 @@ class ImportService {
             url: destinationURL
         )
     }
-    
-    // MARK: - Helper Methods
     
     private func generatePDFCover(from page: PDFPage, documentsDir: URL) -> String {
         let coverName = UUID().uuidString + "_cover.png"
@@ -275,7 +250,6 @@ class ImportService {
     }
 }
 
-// MARK: - UTType Extensions
 extension UTType {
     static let epub = UTType(filenameExtension: "epub") ?? .data
 }

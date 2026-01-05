@@ -7,10 +7,10 @@
 
 import SwiftUI
 
-/// Reading theme configuration with light/dark mode support
 struct AppTheme {
     var fontName: String = "Serif"
     var fontSize: Double = 18.0
+    var lineHeight: CGFloat = 1.8
     var backgroundColor: Color
     var textColor: Color
     var style: ThemeStyle
@@ -24,14 +24,10 @@ struct AppTheme {
         
         var displayName: String {
             switch self {
-            case .default:
-                return "System"
-            case .dark:
-                return "Dark"
-            case .sepia:
-                return "Sepia"
-            case .light:
-                return "Light"
+            case .default: return "System"
+            case .dark: return "Dark"
+            case .sepia: return "Sepia"
+            case .light: return "Light"
             }
         }
     }
@@ -40,7 +36,6 @@ struct AppTheme {
         self.style = style
         self.isDarkMode = isDarkMode
         
-        // Determine colors based on style and system dark mode
         switch style {
         case .default:
             if isDarkMode {
@@ -67,18 +62,15 @@ struct AppTheme {
         }
     }
     
-    /// Initialize with current system appearance
     init(style: ThemeStyle = .default) {
         let isDarkMode = Self.getCurrentSystemDarkMode()
         self.init(style: style, isDarkMode: isDarkMode)
     }
     
-    /// Update theme when system appearance changes
     mutating func updateForSystemAppearance() {
         let isDarkMode = Self.getCurrentSystemDarkMode()
         self.isDarkMode = isDarkMode
         
-        // Re-calculate colors
         switch style {
         case .default:
             if isDarkMode {
@@ -105,7 +97,6 @@ struct AppTheme {
         }
     }
     
-    /// Get current system dark mode status
     private static func getCurrentSystemDarkMode() -> Bool {
         #if os(iOS)
         return UITraitCollection.current.userInterfaceStyle == .dark
@@ -122,7 +113,6 @@ struct AppTheme {
         #endif
     }
     
-    // Legacy support for manual init
     init(backgroundColor: Color, textColor: Color) {
         self.backgroundColor = backgroundColor
         self.textColor = textColor
@@ -130,43 +120,15 @@ struct AppTheme {
         self.isDarkMode = Self.getCurrentSystemDarkMode()
     }
     
-    // Predefined themes
     static let `default` = AppTheme(style: .default)
     static let dark = AppTheme(style: .dark)
     static let sepia = AppTheme(style: .sepia)
     static let light = AppTheme(style: .light)
 }
 
-// MARK: - Color Extensions for Theme Support
+// MARK: - Color Extensions
 
 extension Color {
-    /// Adaptive color that responds to theme changes
-    static func adaptive(lightTheme: Color, darkTheme: Color) -> Color {
-        #if os(iOS)
-        return Color(UIColor { traitCollection in
-            traitCollection.userInterfaceStyle == .dark ? darkTheme.uiColor() : lightTheme.uiColor()
-        })
-        #elseif os(macOS)
-        return Color(NSColor { appearance in
-            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? darkTheme.nsColor() : lightTheme.nsColor()
-        })
-        #else
-        return lightTheme
-        #endif
-    }
-    
-    /// Glass material color that adapts to theme
-    static var glassMaterial: Color {
-        #if os(iOS)
-        return Color(.systemBackground).opacity(0.8)
-        #elseif os(macOS)
-        return Color(.controlBackgroundColor).opacity(0.8)
-        #else
-        return .white.opacity(0.8)
-        #endif
-    }
-    
-    /// Text color that adapts to theme
     static var adaptiveText: Color {
         #if os(iOS)
         return Color(.label)
@@ -177,7 +139,6 @@ extension Color {
         #endif
     }
     
-    /// Secondary text color that adapts to theme
     static var adaptiveSecondaryText: Color {
         #if os(iOS)
         return Color(.secondaryLabel)
@@ -188,7 +149,6 @@ extension Color {
         #endif
     }
     
-    /// Background color that adapts to theme
     static var adaptiveBackground: Color {
         #if os(iOS)
         return Color(.systemBackground)
@@ -199,23 +159,7 @@ extension Color {
         #endif
     }
     
-    /// Adaptive background for components (light/dark aware)
-    static func adaptiveComponentBackground(isDark: Bool) -> Color {
+    static func adaptiveComponentBackground(_ isDark: Bool) -> Color {
         isDark ? Color(red: 0.1, green: 0.1, blue: 0.1) : .white
     }
-    
-    // MARK: - Platform Extensions
-
-#if os(iOS)
-extension Color {
-    var uiColor: UIColor {
-        return UIColor(self)
-    }
 }
-#elseif os(macOS)
-extension Color {
-    var nsColor: NSColor {
-        return NSColor(self)
-    }
-}
-#endif

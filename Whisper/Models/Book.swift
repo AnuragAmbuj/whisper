@@ -25,6 +25,12 @@ final class Book {
 
   @Relationship(deleteRule: .cascade) var bookmarks: [Bookmark] = []
 
+  var bookDir: URL? {
+    guard format == .epub || format == .comic else { return url }
+    guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
+    return docs.appendingPathComponent("Books").appendingPathComponent(id.uuidString)
+  }
+
   init(
     id: UUID = UUID(), title: String, author: String, coverImageName: String, content: String,
     lastReadDate: Date = Date(), progress: Double = 0.0, format: BookFormat = .text,

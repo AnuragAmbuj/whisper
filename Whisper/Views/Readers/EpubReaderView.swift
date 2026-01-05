@@ -10,91 +10,223 @@ import WebKit
 
 struct EpubReaderView: View {
     let bookDir: URL
-    @State private var webView = WKWebView()
+    let theme: AppTheme
+    
+    @State private var webView: WKWebView?
     @State private var chapterPaths: [String] = []
     @State private var currentChapterIndex = 0
     @State private var isLoading = true
     @State private var isShowingTOC = false
     
-    private let theme: AppTheme
-    
-    init(bookDir: URL, theme: AppTheme = .default, fontSize: Double = 18.0, lineHeight: CGFloat = 1.8) {
+    init(bookDir: URL, theme: AppTheme = .default) {
         self.bookDir = bookDir
         self.theme = theme
     }
     
     var body: some View {
         ZStack(alignment: .bottom) {
-            Color(theme.adaptiveBackground)
+            theme.backgroundColor
                 .ignoresSafeArea()
             
-            // WebView Container
-            WebViewContainer(webView: webView)
-                .edgesIgnoringSafeArea(.all)
+            if let webView = webView {
+                WebViewContainer(webView: webView)
+                    .edgesIgnoringSafeArea(.all)
+            }
             
             if isLoading {
                 ProgressView("Loading...")
-                    .progressViewStyle(CircularProgressViewStyle(tint: theme.adaptiveText))
+                    .progressViewStyle(CircularProgressViewStyle(tint: theme.textColor))
             }
             
-            // Navigation Overlay
             if !chapterPaths.isEmpty {
-                HStack {
-                    Button(action: previousChapter) {
-                        Image(systemName: "chevron.left")
-                    }
-                    .foregroundColor(theme.adaptiveText)
-                    
+                VStack {
                     Spacer()
-                    
-                    Button(action: { isShowingTOC = true }) {
-                        Image(systemName: "list.bullet")
-                    }
-                    .foregroundColor(theme.adaptiveText)
-                    
-                    Text("Chapter \(currentChapterIndex + 1) / \(chapterPaths.count)")
-                        .font(.caption)
-                        .chipStyle()
-                }
-                
-                Spacer()
-                
-                Button(action: nextChapter) {
-                    Image(systemName: "chevron.right")
-                    }
-                    .foregroundColor(theme.adaptiveText)
-                    .opacity(currentChapterIndex < chapterPaths.count - 1 ? 1 : 0.3)
-                }
-            }
-            
-            // Table of Contents Sheet
-            .sheet(isPresented: $isShowingTOC) {
-                VStack(alignment: .top, spacing: 16) {
-                    Text("Table of Contents")
-                        .font(.headline)
-                        .foregroundColor(theme.adaptiveText)
-                        .padding()
-                    
-                    ScrollView {
-                        ForEach(0..<chapterPaths.count, id: \.self) { index in
-                            Button(action: {
-                                currentChapterIndex = index
-                            }) {
-                                Text("Chapter \(index + 1)")
-                                    .font(.subheadline)
-                                    .foregroundColor(theme.adaptiveSecondaryText)
-                                    .padding(8)
-                                    .background(theme.isDarkMode ? .ultraThinMaterial : .ultraThickMaterial)
-                                    .cornerRadius(8)
+                    HStack {
+                        Button(action: previousChapter) {
+                            Image(systemName: "chevron.left")
+                                .padding()
+                        }
+                        .disabled(currentChapterIndex <= 0)
+                        .opacity(currentChapterIndex > 0 ? 1 : 0.3)
+                        .foregroundColor(theme.textColor)
+                        
+                        Spacer()
+                        
+                        Button(action: { isShowingTOC = true }) {
+                            HStack {
+                                Image(systemName: "list.bullet")
+                                Text("Chapter \(currentChapterIndex + 1) / \(chapterPaths.count)")
+                                    .font(.caption)
                             }
-                            }
-                            .background(theme.isDarkMode ? Color.white.opacity(0.1) : Color.black.opacity(0.05))
-                            .cornerRadius(12)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(8)
+                        }
+                        .foregroundColor(theme.textColor)
+                        
+                        Spacer()
+                        
+                        Button(action: nextChapter) {
+                            Image(systemName: "chevron.right")
+                                .padding()
+                        }
+                        .disabled(currentChapterIndex >= chapterPaths.count - 1)
+                        .opacity(currentChapterIndex < chapterPaths.count - 1 ? 1 : 0.3)
+                        .foregroundColor(theme.textColor)
                     }
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
                 }
-                .padding()
-                .presentationDetents([.large])
             }
         }
+        .sheet(isPresented: $isShowingTOC) {
+            tocSheet
+        }
+        .task {
+            setupWebView()
+            await loadEpubAsync()
+        }
+        .onChange(of: currentChapterIndex) { _, newIndex in
+            loadChapter(at: newIndex)
+        }
     }
+    
+    private var tocSheet: some View {
+        NavigationStack {
+            List {
+                ForEach(0..<chapterPaths.count, id: \.self) { index in
+                    Button(action: {
+                        currentChapterIndex = index
+                        isShowingTOC = false
+                    }) {
+                        HStack {
+                            Text("Chapter \(index + 1)")
+                                .foregroundColor(index == currentChapterIndex ? .accentColor : .primary)
+                            Spacer()
+                            if index == currentChapterIndex {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.accentColor)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Table of Contents")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") {
+                        isShowingTOC = false
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+    
+    private func setupWebView() {
+        self.webView = WebKitWarmer.shared.createWebView()
+    }
+    
+    private func previousChapter() {
+        guard currentChapterIndex > 0 else { return }
+        currentChapterIndex -= 1
+    }
+    
+    private func nextChapter() {
+        guard currentChapterIndex < chapterPaths.count - 1 else { return }
+        currentChapterIndex += 1
+    }
+    
+    private func loadEpubAsync() async {
+        isLoading = true
+        
+        print("EpubReader: bookDir = \(bookDir.path)")
+        
+        let paths = await Task.detached(priority: .userInitiated) { [bookDir] () -> [String] in
+            let spineURL = bookDir.appendingPathComponent("spine.json")
+            print("EpubReader: Looking for spine at \(spineURL.path)")
+            print("EpubReader: spine.json exists? \(FileManager.default.fileExists(atPath: spineURL.path))")
+            
+            // List contents of bookDir for debugging
+            if let contents = try? FileManager.default.contentsOfDirectory(atPath: bookDir.path) {
+                print("EpubReader: bookDir contents: \(contents)")
+            }
+            
+            guard let data = try? Data(contentsOf: spineURL) else {
+                print("EpubReader: Failed to read spine.json data")
+                return []
+            }
+            
+            guard let relativePaths = try? JSONDecoder().decode([String].self, from: data) else {
+                print("EpubReader: Failed to decode spine.json")
+                print("EpubReader: Raw data: \(String(data: data, encoding: .utf8) ?? "nil")")
+                return []
+            }
+            
+            print("EpubReader: Decoded \(relativePaths.count) paths from spine.json")
+            if let first = relativePaths.first {
+                print("EpubReader: First path: \(first)")
+            }
+            
+            return relativePaths.map { relativePath in
+                let fullPath = bookDir.appendingPathComponent(relativePath).path
+                let exists = FileManager.default.fileExists(atPath: fullPath)
+                print("EpubReader: \(relativePath) -> exists: \(exists)")
+                return fullPath
+            }
+        }.value
+        
+        chapterPaths = paths
+        print("EpubReader: Final chapterPaths count: \(chapterPaths.count)")
+        
+        if !chapterPaths.isEmpty {
+            loadChapter(at: 0)
+        } else {
+            print("EpubReader: ERROR - No chapters loaded!")
+        }
+        
+        isLoading = false
+    }
+    
+    private func loadChapter(at index: Int) {
+        guard index >= 0, index < chapterPaths.count, let webView = webView else {
+            print("EpubReader: loadChapter guard failed - index:\(index), paths:\(chapterPaths.count), webView:\(webView != nil)")
+            return
+        }
+        
+        let chapterPath = chapterPaths[index]
+        let chapterURL = URL(fileURLWithPath: chapterPath)
+        
+        print("EpubReader: Loading chapter \(index) from \(chapterURL.path)")
+        print("EpubReader: allowingReadAccessTo: \(bookDir.path)")
+        
+        webView.loadFileURL(chapterURL, allowingReadAccessTo: bookDir)
+    }
+    
 }
+
+#if os(iOS)
+struct WebViewContainer: UIViewRepresentable {
+    let webView: WKWebView
+    
+    func makeUIView(context: Context) -> WKWebView {
+        return webView
+    }
+    
+    func updateUIView(_ uiView: WKWebView, context: Context) {}
+}
+#elseif os(macOS)
+struct WebViewContainer: NSViewRepresentable {
+    let webView: WKWebView
+    
+    func makeNSView(context: Context) -> WKWebView {
+        return webView
+    }
+    
+    func updateNSView(_ nsView: WKWebView, context: Context) {}
+}
+#endif

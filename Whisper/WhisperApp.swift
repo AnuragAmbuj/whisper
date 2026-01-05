@@ -10,6 +10,8 @@ import SwiftData
 
 @main
 struct WhisperApp: App {
+    @State private var showSplash = true
+    
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             Book.self,
@@ -26,7 +28,22 @@ struct WhisperApp: App {
 
     var body: some Scene {
         WindowGroup {
-            LibraryView()
+            ZStack {
+                LibraryView()
+                    .opacity(showSplash ? 0 : 1)
+                
+                if showSplash {
+                    SplashScreenView()
+                        .transition(.opacity)
+                }
+            }
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    withAnimation(.easeOut(duration: 0.5)) {
+                        showSplash = false
+                    }
+                }
+            }
         }
         .modelContainer(sharedModelContainer)
     }
