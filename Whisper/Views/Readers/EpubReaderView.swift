@@ -148,8 +148,8 @@ struct EpubReaderView: View {
   private func setupWebView() {
     let webView = WebKitWarmer.shared.createWebView(allowFileAccess: true)
 
-    webView.isOpaque = false
     #if os(iOS)
+      webView.isOpaque = false
       webView.backgroundColor = UIColor.clear
       webView.scrollView.backgroundColor = UIColor.clear
       webView.scrollView.contentInsetAdjustmentBehavior = .never
