@@ -21,7 +21,7 @@ final class WebKitWarmer {
     isWarmed = true
 
     let config = WKWebViewConfiguration()
-    config.processPool = WKProcessPool()
+    config.preferences.isTextInteractionEnabled = true
 
     let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: config)
     webView.loadHTMLString("<html><body></body></html>", baseURL: nil)
@@ -40,11 +40,6 @@ final class WebKitWarmer {
       config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
     }
 
-    if let warmed = warmedWebView {
-      config.processPool = warmed.configuration.processPool
-    }
-
-    // Optimize for static content reading
     config.suppressesIncrementalRendering = true
 
     let webView = WKWebView(frame: .zero, configuration: config)

@@ -146,10 +146,21 @@ struct EpubReaderView: View {
   }
 
   private func setupWebView() {
-    // Use Warmer with file access enabled
-    self.webView = WebKitWarmer.shared.createWebView(allowFileAccess: true)
-    self.webView?.navigationDelegate = contextCoordinator
-    self.webView?.scrollView.isScrollEnabled = false
+    let webView = WebKitWarmer.shared.createWebView(allowFileAccess: true)
+
+    webView.isOpaque = false
+    #if os(iOS)
+      webView.backgroundColor = UIColor.clear
+      webView.scrollView.backgroundColor = UIColor.clear
+      webView.scrollView.contentInsetAdjustmentBehavior = .never
+    #else
+      webView.setValue(false, forKey: "drawsBackground")
+    #endif
+
+    webView.scrollView.isScrollEnabled = false
+    webView.navigationDelegate = contextCoordinator
+
+    self.webView = webView
   }
 
   // We need a coordinator for WKNavigationDelegate to handle load completion

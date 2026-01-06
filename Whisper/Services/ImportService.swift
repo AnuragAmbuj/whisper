@@ -72,25 +72,11 @@ class ImportService {
         
         switch ext {
         case "epub":
-            return await withCheckedContinuation { continuation in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    let book = self.importEPUBSync(from: sourceURL, booksDir: booksDir)
-                    DispatchQueue.main.async {
-                        continuation.resume(returning: book)
-                    }
-                }
-            }
+            return importEPUBSync(from: sourceURL, booksDir: booksDir)
         case "pdf":
             return importPDFSync(from: sourceURL, booksDir: booksDir, documentsDir: documentsDir)
         case "cbz", "cbr", "zip":
-            return await withCheckedContinuation { continuation in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    let book = self.importComicSync(from: sourceURL, booksDir: booksDir)
-                    DispatchQueue.main.async {
-                        continuation.resume(returning: book)
-                    }
-                }
-            }
+            return importComicSync(from: sourceURL, booksDir: booksDir)
         case "txt":
             return importTextSync(from: sourceURL, booksDir: booksDir)
         default:
@@ -99,7 +85,7 @@ class ImportService {
         }
     }
     
-    private nonisolated func importEPUBSync(from sourceURL: URL, booksDir: URL) -> Book? {
+    private func importEPUBSync(from sourceURL: URL, booksDir: URL) -> Book? {
         let destinationURL = booksDir.appendingPathComponent(sourceURL.lastPathComponent)
         
         do {
@@ -170,7 +156,7 @@ class ImportService {
         )
     }
     
-    private nonisolated func importComicSync(from sourceURL: URL, booksDir: URL) -> Book? {
+    private func importComicSync(from sourceURL: URL, booksDir: URL) -> Book? {
         let destinationURL = booksDir.appendingPathComponent(sourceURL.lastPathComponent)
         
         do {
