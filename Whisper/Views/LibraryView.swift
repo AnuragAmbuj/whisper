@@ -187,12 +187,21 @@ struct LibraryView: View {
   }
 
   func deleteBook(_ book: Book) {
-    // Clean up files first
-    book.cleanupFiles()
-
-    // Remove from database
+    let bookDirToDelete = book.bookDir
+    let coverName = book.coverImageName
+    
     modelContext.delete(book)
     try? modelContext.save()
+    
+    let fileManager = FileManager.default
+    if let dir = bookDirToDelete {
+      try? fileManager.removeItem(at: dir)
+    }
+    if !coverName.isEmpty,
+       let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first {
+      let coverURL = docs.appendingPathComponent(coverName)
+      try? fileManager.removeItem(at: coverURL)
+    }
   }
 }
 

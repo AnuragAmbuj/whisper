@@ -26,6 +26,7 @@ final class Book {
   @Relationship(deleteRule: .cascade) var bookmarks: [Bookmark] = []
 
   var bookDir: URL? {
+    guard self.modelContext != nil else { return nil }
     guard format == .epub || format == .comic else { return url }
     guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
     else { return nil }
