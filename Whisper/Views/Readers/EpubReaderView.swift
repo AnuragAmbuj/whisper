@@ -153,13 +153,12 @@ struct EpubReaderView: View {
       webView.backgroundColor = UIColor.clear
       webView.scrollView.backgroundColor = UIColor.clear
       webView.scrollView.contentInsetAdjustmentBehavior = .never
+      webView.scrollView.isScrollEnabled = false
     #else
       webView.setValue(false, forKey: "drawsBackground")
     #endif
 
-    webView.scrollView.isScrollEnabled = false
     webView.navigationDelegate = contextCoordinator
-
     self.webView = webView
   }
 
