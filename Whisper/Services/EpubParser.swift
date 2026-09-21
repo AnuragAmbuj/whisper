@@ -176,7 +176,7 @@ class EpubParser: NSObject, XMLParserDelegate {
       if chapterPaths.isEmpty {
         if let enumerator = fileManager.enumerator(at: unzipDir, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
           var found: [URL] = []
-          for case let fileURL as URL in enumerator {
+          while let fileURL = enumerator.nextObject() as? URL {
             let ext = fileURL.pathExtension.lowercased()
             let name = fileURL.lastPathComponent.lowercased()
             if (ext == "xhtml" || ext == "html" || ext == "htm"),

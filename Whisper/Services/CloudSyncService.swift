@@ -156,7 +156,7 @@ final class CloudSyncService: ObservableObject {
             ) else { return }
             
             var found: [URL] = []
-            for case let fileURL as URL in enumerator {
+            while let fileURL = enumerator.nextObject() as? URL {
                 if supportedExtensions.contains(fileURL.pathExtension.lowercased()) {
                     found.append(fileURL)
                 }

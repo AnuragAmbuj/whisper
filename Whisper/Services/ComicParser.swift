@@ -193,7 +193,7 @@ class ComicParser {
             includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles]
         ) {
-            for case let fileURL as URL in enumerator {
+            while let fileURL = enumerator.nextObject() as? URL {
                 let ext = fileURL.pathExtension.lowercased()
                 if imageExtensions.contains(ext) {
                     // Skip macOS resource fork files

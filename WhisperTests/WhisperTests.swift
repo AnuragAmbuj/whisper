@@ -226,7 +226,7 @@ struct WhisperTests {
         store.isWhisperPlusSubscribed = originalState
     }
 
-    @Test func testComicPageResolutionAndOrdering() async throws {
+    @Test @MainActor func testComicPageResolutionAndOrdering() async throws {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -257,13 +257,13 @@ struct WhisperTests {
         #expect(fromJSON[3].lastPathComponent == "page10.jpg")
     }
 
-    @Test func testComicReadingModes() async throws {
+    @Test @MainActor func testComicReadingModes() async throws {
         #expect(ComicReadingMode.allCases.count == 2)
         #expect(ComicReadingMode.paged.iconName == "book.pages")
         #expect(ComicReadingMode.continuous.iconName == "scroll")
     }
 
-    @Test func testWebtoonFocalPageTracking() async throws {
+    @Test @MainActor func testWebtoonFocalPageTracking() async throws {
         let positions = [
             WebtoonPagePos(index: 0, midY: 100),
             WebtoonPagePos(index: 1, midY: 400),
@@ -316,7 +316,7 @@ struct WhisperTests {
         #expect(types.contains(.zip))
     }
 
-    @Test func testEpubReadingModesAndIcons() async throws {
+    @Test @MainActor func testEpubReadingModesAndIcons() async throws {
         let paged = EpubReadingMode.paginated
         let scroll = EpubReadingMode.scroll
 
@@ -370,7 +370,7 @@ struct WhisperTests {
         }
 
         var found: [URL] = []
-        for case let fileURL as URL in enumerator {
+        while let fileURL = enumerator.nextObject() as? URL {
             let ext = fileURL.pathExtension.lowercased()
             let name = fileURL.lastPathComponent.lowercased()
             if (ext == "xhtml" || ext == "html" || ext == "htm"),

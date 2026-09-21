@@ -176,8 +176,7 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
             --whisper-text: \(textHex);
             --whisper-font-size: \(fontSize)px;
             --whisper-line-height: \(theme.lineHeight);
-          }
-
+          }\n
           * {
             box-sizing: border-box !important;
             -webkit-tap-highlight-color: transparent;
@@ -732,7 +731,8 @@ struct EpubReaderView: View {
         options: [.skipsHiddenFiles]
       ) {
         var found: [URL] = []
-        for case let fileURL as URL in enumerator {
+        while let nextObj = enumerator.nextObject() {
+          guard let fileURL = nextObj as? URL else { continue }
           let ext = fileURL.pathExtension.lowercased()
           let name = fileURL.lastPathComponent.lowercased()
           if (ext == "xhtml" || ext == "html" || ext == "htm"),
