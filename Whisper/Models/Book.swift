@@ -10,33 +10,59 @@ import SwiftData
 
 @Model
 final class Book {
-  var id: UUID
-  var title: String
-  var author: String
-  var coverImageName: String
-  var content: String
-  var lastReadDate: Date
-  var progress: Double  // 0.0 to 1.0
+  var id: UUID = UUID()
+  var title: String = ""
+  var author: String = ""
+  var coverImageName: String = ""
+  var content: String = ""
+  var lastReadDate: Date = Date()
+  var progress: Double = 0.0  // 0.0 to 1.0
 
-  // New properties for Phase 5
-  var format: BookFormat = BookFormat.text
-  var url: URL?  // Local file URL
+  // Optional to safely deserialize legacy database records where format was NULL
+  var format: BookFormat? = BookFormat.text
+  var url: URL? = nil  // Local file URL
   var sampleImages: [String] = []  // For mock comics
 
-  @Relationship(deleteRule: .cascade) var bookmarks: [Bookmark] = []
+  @Relationship(deleteRule: .cascade, inverse: \Bookmark.book)
+  var bookmarks: [Bookmark]? = []
+
+  var safeBookmarks: [Bookmark] {
+    get { bookmarks ?? [] }
+    set { bookmarks = newValue }
+  }
 
   var bookDir: URL? {
-    guard self.modelContext != nil else { return nil }
-    guard format == .epub || format == .comic else { return url }
+    let currentFormat = format ?? .text
+    guard currentFormat == .epub || currentFormat == .comic else { return url }
+    
+    // 1. If explicit URL exists on disk, use it
+    if let url = url, FileManager.default.fileExists(atPath: url.path) {
+      return url
+    }
+    
+    // 2. Resolve inside standard documents directory for epub/comic
     guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-    else { return nil }
-    return docs.appendingPathComponent("Books").appendingPathComponent(id.uuidString)
+    else { return url }
+    
+    let path = docs.appendingPathComponent("Books", isDirectory: true).appendingPathComponent(id.uuidString, isDirectory: true)
+    if FileManager.default.fileExists(atPath: path.path) {
+      return path
+    }
+    
+    return url ?? path
   }
 
   init(
-    id: UUID = UUID(), title: String, author: String, coverImageName: String, content: String,
-    lastReadDate: Date = Date(), progress: Double = 0.0, format: BookFormat = .text,
-    url: URL? = nil, sampleImages: [String] = []
+    id: UUID = UUID(),
+    title: String = "",
+    author: String = "",
+    coverImageName: String = "",
+    content: String = "",
+    lastReadDate: Date = Date(),
+    progress: Double = 0.0,
+    format: BookFormat? = .text,
+    url: URL? = nil,
+    sampleImages: [String] = []
   ) {
     self.id = id
     self.title = title
@@ -45,9 +71,18 @@ final class Book {
     self.content = content
     self.lastReadDate = lastReadDate
     self.progress = progress
-    self.format = format
+    self.format = format ?? .text
     self.url = url
     self.sampleImages = sampleImages
+    self.bookmarks = []
+  }
+
+  func addBookmark(_ bookmark: Bookmark) {
+    if bookmarks == nil {
+      bookmarks = []
+    }
+    bookmark.book = self
+    bookmarks?.append(bookmark)
   }
 
   /// Deletes all files associated with this book (EPUB directory, cover image)
@@ -57,7 +92,8 @@ final class Book {
     // Delete extracted book directory
     if let dir = bookDir {
       try? fileManager.removeItem(at: dir)
-      print("Book: Deleted directory at \(dir.path)")
+    } else if let fileURL = url, fileURL.isFileURL {
+      try? fileManager.removeItem(at: fileURL)
     }
 
     // Delete cover image
@@ -65,7 +101,6 @@ final class Book {
       if let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first {
         let coverURL = docs.appendingPathComponent(coverImageName)
         try? fileManager.removeItem(at: coverURL)
-        print("Book: Deleted cover at \(coverURL.path)")
       }
     }
   }

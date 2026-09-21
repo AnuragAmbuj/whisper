@@ -19,6 +19,7 @@ struct Chapter: Identifiable, Codable {
 
 struct ChapterListView: View {
   let bookDir: URL
+  var chapterPaths: [String] = []
   @Binding var isPresented: Bool
   let onSelect: (String) -> Void
 
@@ -26,51 +27,71 @@ struct ChapterListView: View {
 
   var body: some View {
     NavigationStack {
-      List(chapters) { chapter in
-        Button(action: {
-          onSelect(chapter.path)
-          isPresented = false
-        }) {
-          Text(chapter.title)
-            .foregroundColor(.primary)
+      Group {
+        if chapters.isEmpty {
+          ContentUnavailableView(
+            "No Chapters Found",
+            systemImage: "list.bullet.rectangle.portrait",
+            description: Text("Table of contents is not available for this book.")
+          )
+        } else {
+          List(chapters) { chapter in
+            Button(action: {
+              onSelect(chapter.path)
+              isPresented = false
+            }) {
+              HStack {
+                Text(chapter.title)
+                  .font(.body)
+                  .foregroundColor(.primary)
+                Spacer()
+                Image(systemName: "chevron.right")
+                  .font(.caption2.weight(.semibold))
+                  .foregroundColor(.secondary)
+              }
+              .padding(.vertical, 4)
+            }
+            .buttonStyle(.plain)
+          }
+          #if os(iOS)
+          .listStyle(.insetGrouped)
+          #else
+          .listStyle(.inset)
+          #endif
         }
       }
       .navigationTitle("Table of Contents")
+      #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+      #endif
       .toolbar {
-        #if os(iOS)
-        ToolbarItem(placement: .topBarTrailing) {
-          Button("Close") { isPresented = false }
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Done") { isPresented = false }
         }
-        #else
-        ToolbarItem(placement: .cancellationAction) {
-          Button("Close") { isPresented = false }
-        }
-        #endif
       }
       .onAppear(perform: loadTOC)
-      .overlay {
-        if chapters.isEmpty {
-          ContentUnavailableView("No Chapters Found", systemImage: "list.bullet.rectangle.portrait")
-        }
-      }
     }
     .presentationDetents([.medium, .large])
   }
 
   func loadTOC() {
     let tocURL = bookDir.appendingPathComponent("toc.json")
-    do {
-      let data = try Data(contentsOf: tocURL)
-      // Reuse the structure defined implicitly or explicitly.
-      // In EpubParser it was TOCItem (id, title, path).
-      // We need to match that structure.
-      // Let's redefine 'Chapter' to match what we saved or reuse a shared type if possible.
-      // Since we can't easily share types across FILES without a common model file (which we have but didn't update),
-      // I'll ensure `Chapter` matches the JSON structure.
-      // EpubParser uses `id` (UUID), `title`, `path`.
-      chapters = try JSONDecoder().decode([Chapter].self, from: data)
-    } catch {
-      print("Failed to load TOC: \(error)")
+    if let data = try? Data(contentsOf: tocURL),
+       let loaded = try? JSONDecoder().decode([Chapter].self, from: data),
+       !loaded.isEmpty {
+      self.chapters = loaded
+      return
+    }
+
+    // Fallback: generate chapters from chapterPaths
+    if !chapterPaths.isEmpty {
+      self.chapters = chapterPaths.enumerated().map { index, path in
+        let filename = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+        let formattedTitle = filename.replacingOccurrences(of: "_", with: " ")
+          .replacingOccurrences(of: "-", with: " ")
+          .capitalized
+        return Chapter(title: formattedTitle.isEmpty ? "Chapter \(index + 1)" : formattedTitle, path: path)
+      }
     }
   }
 }

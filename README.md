@@ -1,6 +1,6 @@
 # Whisper
 
-A universal e-book and comic reader app for iOS, iPadOS, and macOS with performance optimizations and beautiful UI.
+A free universal e-book and comic reader app for iOS, iPadOS, and macOS with performance optimizations and beautiful UI.
 
 **Status**: Work in Progress - Development in Progress
 
@@ -178,7 +178,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Project Status
 
-**Version**: 1.0.0  
+**Version**: 0.0.12  
 **Status**: Work in Progress - Development in Progress  
 **Last Updated**: January 5, 2026  
 

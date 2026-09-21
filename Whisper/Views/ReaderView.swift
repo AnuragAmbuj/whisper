@@ -17,16 +17,16 @@ struct ReaderView: View {
   @State private var showBookmarks = false
 
   @State private var pageIndex: Int = 0  // For PDF/Comic
+  @State private var totalPages: Int = 1
 
   var body: some View {
     ZStack {
-      // Background
-      LiquidBackground()
-        .opacity(DS.BackgroundOpacity.overlay)
+      // Clean reading surface matching selected eye-comfort theme (Apple HIG compliant)
+      viewModel.theme.backgroundColor
         .ignoresSafeArea()
 
       // Content Area
-      switch viewModel.book.format {
+      switch viewModel.book.format ?? .text {
       case .text:
         TextReaderView(
           book: viewModel.book, theme: viewModel.theme,
@@ -35,14 +35,15 @@ struct ReaderView: View {
       case .pdf:
         if let url = viewModel.book.url {
           ZStack {
-            PDFKitView(url: url, currentPageIndex: $pageIndex)
+            PDFKitView(url: url, currentPageIndex: $pageIndex, totalPages: $totalPages, theme: viewModel.theme)
           }
           .onAppear {
-            // Restore page
-            pageIndex = Int(viewModel.book.progress)
+            pageIndex = viewModel.currentLocation
           }
           .onChange(of: pageIndex) { _, newValue in
-            viewModel.updateProgress(Double(newValue))
+            viewModel.updateLocation(newValue)
+            let prog = totalPages > 1 ? Double(newValue) / Double(totalPages - 1) : 1.0
+            viewModel.updateProgress(prog)
           }
         } else {
           ContentUnavailableView("PDF Not Found", systemImage: "doc.text")
@@ -50,27 +51,38 @@ struct ReaderView: View {
 
       case .comic:
         ComicReaderView(
-          bookDir: viewModel.book.url,
+          bookDir: viewModel.book.bookDir,
           mockImages: viewModel.book.sampleImages,
-          currentPage: $pageIndex
+          currentPage: $pageIndex,
+          totalPages: $totalPages
         )
         .onAppear {
-          pageIndex = Int(viewModel.book.progress)
+          pageIndex = viewModel.currentLocation
         }
         .onChange(of: pageIndex) { _, newValue in
-          viewModel.updateProgress(Double(newValue))
+          viewModel.updateLocation(newValue)
+          let prog = totalPages > 1 ? Double(newValue) / Double(totalPages - 1) : 1.0
+          viewModel.updateProgress(prog)
         }
 
       case .epub:
         if let bookDir = viewModel.book.bookDir {
-          EpubReaderView(bookDir: bookDir, theme: viewModel.theme, fontSize: viewModel.fontSize)
+          EpubReaderView(
+            bookDir: bookDir,
+            theme: viewModel.theme,
+            fontSize: viewModel.fontSize,
+            bookTitle: viewModel.book.title,
+            onProgressChanged: { progress in
+              viewModel.updateProgress(progress)
+            }
+          )
         } else {
           ContentUnavailableView("EPUB Not Found", systemImage: "book.closed")
         }
       }
 
       if showSettings {
-        Color.black.opacity(0.2)
+        Color.black.opacity(0.4)
           .ignoresSafeArea()
           .onTapGesture {
             withAnimation(.easeInOut(duration: DS.Animation.normal)) { showSettings = false }
@@ -86,13 +98,14 @@ struct ReaderView: View {
       }
     }
     #if os(iOS)
+      .navigationBarBackButtonHidden(true)
       .toolbarBackground(.hidden, for: .navigationBar)
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
           Button(action: { dismiss() }) {
             Image(systemName: "xmark.circle.fill")
             .symbolRenderingMode(.hierarchical)
-            .foregroundColor(.white)
+            .foregroundColor(viewModel.theme.textColor.opacity(0.85))
             .font(.title2)
           }
         }
@@ -101,17 +114,17 @@ struct ReaderView: View {
           HStack(spacing: DS.Spacing.lg) {
             Button(action: { showBookmarks = true }) {
               Image(systemName: "list.bullet")
-              .foregroundColor(.white)
+              .foregroundColor(viewModel.theme.textColor.opacity(0.85))
             }
             Button(action: { viewModel.toggleBookmark() }) {
               Image(systemName: viewModel.isBookmarked ? "bookmark.fill" : "bookmark")
-              .foregroundColor(.white)
+              .foregroundColor(viewModel.isBookmarked ? .yellow : viewModel.theme.textColor.opacity(0.85))
             }
             Button(action: {
               withAnimation(.easeInOut(duration: DS.Animation.normal)) { showSettings.toggle() }
             }) {
               Image(systemName: "textformat.size")
-              .foregroundColor(.white)
+              .foregroundColor(viewModel.theme.textColor.opacity(0.85))
             }
           }
         }
@@ -129,6 +142,7 @@ struct ReaderView: View {
             }
             Button(action: { viewModel.toggleBookmark() }) {
               Image(systemName: viewModel.isBookmarked ? "bookmark.fill" : "bookmark")
+              .foregroundColor(viewModel.isBookmarked ? .yellow : .white)
             }
             Button(action: {
               withAnimation(.easeInOut(duration: DS.Animation.normal)) { showSettings.toggle() }
@@ -141,10 +155,12 @@ struct ReaderView: View {
     #endif
 
     .sheet(isPresented: $showBookmarks) {
-      BookmarksList(book: viewModel.book)
+      BookmarksList(book: viewModel.book) { bookmark in
+        pageIndex = bookmark.pageOrLocation
+        viewModel.updateLocation(bookmark.pageOrLocation)
+      }
     }
     .onDisappear {
-      // Save progress logic
       try? modelContext.save()
     }
   }

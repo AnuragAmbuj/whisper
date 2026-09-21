@@ -20,25 +20,66 @@ struct TextReaderView: View {
         self.lineHeight = lineHeight
     }
     
+    private var titleFont: Font {
+        switch theme.fontName.lowercased() {
+        case "serif":
+            return .system(size: fontSize * 1.5, weight: .bold, design: .serif)
+        case "sans", "system":
+            return .system(size: fontSize * 1.5, weight: .bold, design: .default)
+        case "mono", "monospace":
+            return .system(size: fontSize * 1.5, weight: .bold, design: .monospaced)
+        case "round", "rounded":
+            return .system(size: fontSize * 1.5, weight: .bold, design: .rounded)
+        default:
+            return .custom(theme.fontName, size: fontSize * 1.5).bold()
+        }
+    }
+    
+    private var bodyFont: Font {
+        switch theme.fontName.lowercased() {
+        case "serif":
+            return .system(size: fontSize, design: .serif)
+        case "sans", "system":
+            return .system(size: fontSize, design: .default)
+        case "mono", "monospace":
+            return .system(size: fontSize, design: .monospaced)
+        case "round", "rounded":
+            return .system(size: fontSize, design: .rounded)
+        default:
+            return .custom(theme.fontName, size: fontSize)
+        }
+    }
+    
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: theme.lineHeight) {
+            VStack(alignment: .leading, spacing: DS.Spacing.lg) {
                 Text(book.title)
-                    .font(.custom(theme.fontName, size: fontSize * 1.5))
-                    .fontWeight(.bold)
+                    .font(titleFont)
                     .foregroundColor(theme.textColor)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal)
+                    .padding(.top, DS.Spacing.xl)
+                
+                if !book.author.isEmpty {
+                    Text(book.author)
+                        .font(bodyFont)
+                        .foregroundColor(theme.textColor.opacity(0.7))
+                        .padding(.bottom, DS.Spacing.sm)
+                }
                 
                 Text(book.content)
-                    .font(.custom(theme.fontName, size: fontSize))
+                    .font(bodyFont)
                     .foregroundColor(theme.textColor)
-                    .lineSpacing(theme.lineHeight)
-                    .padding(.horizontal)
+                    .lineSpacing(lineHeight * 3.5)
                     .textSelection(.enabled)
+                    .padding(.bottom, DS.Spacing.xxxl)
             }
+            .padding(.horizontal, DS.Spacing.xxl)
+            .frame(maxWidth: 720, alignment: .leading)
+            .frame(maxWidth: .infinity)
+            .pinchToZoom(minScale: 0.85, maxScale: 3.0, doubleTapScale: 1.8)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.backgroundColor)
+        .animation(.easeInOut(duration: 0.25), value: theme.style)
     }
 }

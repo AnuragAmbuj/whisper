@@ -9,51 +9,61 @@ import SwiftUI
 
 struct BookmarksList: View {
     @Bindable var book: Book
+    var onSelectBookmark: ((Bookmark) -> Void)? = nil
     @Environment(\.dismiss) var dismiss
     
     var body: some View {
         NavigationStack {
-            ZStack {
-                LiquidBackground()
-                    .opacity(DS.BackgroundOpacity.overlay)
-                    .ignoresSafeArea()
-                
-                if book.bookmarks.isEmpty {
+            Group {
+                if book.safeBookmarks.isEmpty {
                     ContentUnavailableView(
                         "No Bookmarks",
                         systemImage: "bookmark.slash",
                         description: Text("Tap the bookmark icon while reading to save your spot.")
                     )
-                    .foregroundColor(.white)
                 } else {
                     List {
-                        ForEach(book.bookmarks) { bookmark in
-                            HStack {
-                                VStack(alignment: .leading) {
-                                    Text("Page \(bookmark.pageOrLocation)")
-                                        .font(.headline)
-                                        .foregroundColor(.white)
-                                    if let note = bookmark.note {
-                                        Text(note)
-                                            .font(.caption)
-                                            .foregroundColor(.white.opacity(DS.Opacity.tertiary))
+                        ForEach(book.safeBookmarks) { bookmark in
+                            Button(action: {
+                                onSelectBookmark?(bookmark)
+                                dismiss()
+                            }) {
+                                HStack(alignment: .center) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(locationTitle(for: bookmark))
+                                            .font(.headline)
+                                            .foregroundColor(.primary)
+                                        
+                                        if let note = bookmark.note {
+                                            Text(note)
+                                                .font(.subheadline)
+                                                .foregroundColor(.secondary)
+                                        }
+                                    }
+                                    
+                                    Spacer()
+                                    
+                                    VStack(alignment: .trailing, spacing: 4) {
+                                        Text(bookmark.date.formatted(.relative(presentation: .named)))
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                        
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption2.weight(.semibold))
+                                            .foregroundColor(.secondary)
                                     }
                                 }
-                                Spacer()
-                                Text(bookmark.date.formatted(.relative(presentation: .named)))
-                                    .font(.caption2)
-                                    .foregroundColor(.white.opacity(DS.Opacity.quaternary))
+                                .padding(.vertical, 4)
                             }
-                            .padding()
-                            .background(.ultraThinMaterial)
-                            .cornerRadius(DS.Radius.md)
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
+                            .buttonStyle(.plain)
                         }
                         .onDelete(perform: deleteBookmark)
                     }
-                    .listStyle(.plain)
-                    .scrollContentBackground(.hidden)
+                    #if os(iOS)
+                    .listStyle(.insetGrouped)
+                    #else
+                    .listStyle(.inset)
+                    #endif
                 }
             }
             .navigationTitle("Bookmarks")
@@ -61,26 +71,35 @@ struct BookmarksList: View {
             .navigationBarTitleDisplayMode(.inline)
 #endif
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
                         dismiss()
                     }
-                    .foregroundColor(.white)
                 }
             }
-            .preferredColorScheme(.dark)
+        }
+        .presentationDetents([.medium, .large])
+    }
+    
+    private func locationTitle(for bookmark: Bookmark) -> String {
+        switch book.format ?? .text {
+        case .pdf, .comic:
+            return "Page \(bookmark.pageOrLocation + 1)"
+        case .epub:
+            return "Chapter \(bookmark.pageOrLocation + 1)"
+        case .text:
+            return "Position \(bookmark.pageOrLocation)%"
         }
     }
     
     func deleteBookmark(at offsets: IndexSet) {
-        book.bookmarks.remove(atOffsets: offsets)
-        // In real SwiftData, context would auto-save or might need explicit save
+        book.bookmarks?.remove(atOffsets: offsets)
     }
 }
 
 #Preview {
     let mockBook = Book(title: "Preview Book", author: "Author", coverImageName: "", content: "Content")
-    mockBook.bookmarks.append(Bookmark(pageOrLocation: 10, note: "Interesting part"))
+    mockBook.addBookmark(Bookmark(pageOrLocation: 10, note: "Interesting part"))
     
     return BookmarksList(book: mockBook)
 }

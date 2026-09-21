@@ -6,74 +6,49 @@
 //
 
 import Foundation
-import SwiftData
 
-/// Parsed EPUB metadata
-struct EpubModel {
-  let title: String
-  let author: String
-  let coverPath: String?
-  let contentPath: String
-}
+#if canImport(UIKit)
+  import UIKit
+#elseif canImport(AppKit)
+  import AppKit
+#endif
 
-/// Table of Contents item for navigation
-struct TOCItem: Codable, Identifiable {
-  var id = UUID()
-  let title: String
-  let path: String
-
-  enum CodingKeys: String, CodingKey {
-    case id, title, path
-  }
-}
-
-/// EPUB parsing errors
-enum EpubParserError: Error, LocalizedError {
-  case fileNotFound
-  case invalidEpub
+enum EpubParserError: Error {
+  case invalidZip
   case containerNotFound
   case opfNotFound
-  case parsingFailed(String)
-
-  var errorDescription: String? {
-    switch self {
-    case .fileNotFound:
-      return "EPUB file not found"
-    case .invalidEpub:
-      return "Invalid EPUB format"
-    case .containerNotFound:
-      return "container.xml not found in EPUB"
-    case .opfNotFound:
-      return "OPF file not found in EPUB"
-    case .parsingFailed(let message):
-      return "Parsing failed: \(message)"
-    }
-  }
+  case parsingFailed
 }
 
-/// Cross-platform EPUB parser supporting EPUB 2 and EPUB 3 formats
+struct TOCItem: Codable {
+  let title: String
+  let path: String
+}
+
 class EpubParser: NSObject, XMLParserDelegate {
   static let shared = EpubParser()
 
-  // MARK: - Parsing State
+  // State
   private var currentElement = ""
-  private var foundTitle = ""
-  private var foundAuthor = ""
   private var foundRootfile = ""
 
-  // Manifest & Spine
-  private var manifestItems: [String: String] = [:]  // ID -> Href
-  private var spineItemRefs: [String] = []
+  // OPF Metadata
+  private var foundTitle = ""
+  private var foundAuthor = ""
   private var foundCoverID: String?
-
-  // TOC State
   private var foundTOCID: String?
-  private var tocItems: [TOCItem] = []
-  private var tempNavLabel = ""
-  private var tempContentSrc = ""
+  private var manifestItems: [String: String] = [:]  // id -> href
+  private var spineItemRefs: [String] = []  // idref list
+
+  // State flags
   private var isParsingOPF = false
   private var isParsingNCX = false
   private var isParsingNavDoc = false
+
+  // TOC State
+  private var tocItems: [TOCItem] = []
+  private var tempNavLabel = ""
+  private var tempContentSrc = ""
   private var inNavTOC = false
   private var navLinkHref = ""
   private var navLinkText = ""
@@ -156,7 +131,8 @@ class EpubParser: NSObject, XMLParserDelegate {
       // 4. Extract cover image
       var coverImageName = ""
       if let coverID = foundCoverID, let href = manifestItems[coverID] {
-        let coverURL = opfURL.deletingLastPathComponent().appendingPathComponent(href)
+        let cleanCoverHref = (href.components(separatedBy: "#").first ?? href).removingPercentEncoding ?? href
+        let coverURL = opfURL.deletingLastPathComponent().appendingPathComponent(cleanCoverHref)
         if fileManager.fileExists(atPath: coverURL.path) {
           let ext = coverURL.pathExtension
           let newCoverName = "\(bookID.uuidString)_cover.\(ext)"
@@ -185,10 +161,36 @@ class EpubParser: NSObject, XMLParserDelegate {
       let prefix =
         relativeOpfPath.hasPrefix("/") ? String(relativeOpfPath.dropFirst()) : relativeOpfPath
 
-      let chapterPaths = spineItemRefs.compactMap { idref -> String? in
-        guard let href = manifestItems[idref] else { return nil }
-        if prefix.isEmpty { return href }
-        return prefix.isEmpty ? href : "\(prefix)/\(href)"
+      var chapterPaths = spineItemRefs.compactMap { idref -> String? in
+        guard let rawHref = manifestItems[idref] else { return nil }
+        let cleanHref = (rawHref.components(separatedBy: "#").first ?? rawHref).removingPercentEncoding ?? rawHref
+        let fileURL = opfDir.appendingPathComponent(cleanHref).standardizedFileURL
+        if fileManager.fileExists(atPath: fileURL.path) {
+          let rel = fileURL.path.replacingOccurrences(of: unzipDir.standardizedFileURL.path + "/", with: "")
+          return rel
+        }
+        return prefix.isEmpty ? cleanHref : "\(prefix)/\(cleanHref)"
+      }
+
+      // Fallback: If chapterPaths is empty, search recursively for .xhtml / .html files
+      if chapterPaths.isEmpty {
+        if let enumerator = fileManager.enumerator(at: unzipDir, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
+          var found: [URL] = []
+          for case let fileURL as URL in enumerator {
+            let ext = fileURL.pathExtension.lowercased()
+            let name = fileURL.lastPathComponent.lowercased()
+            if (ext == "xhtml" || ext == "html" || ext == "htm"),
+               !name.contains("toc"),
+               !name.contains("nav"),
+               !name.hasPrefix(".") {
+              found.append(fileURL)
+            }
+          }
+          let sorted = found.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+          chapterPaths = sorted.map {
+            $0.path.replacingOccurrences(of: unzipDir.standardizedFileURL.path + "/", with: "")
+          }
+        }
       }
 
       // Save spine to JSON
@@ -201,11 +203,12 @@ class EpubParser: NSObject, XMLParserDelegate {
       }
 
       // 6. Parse TOC (try EPUB 3 Nav first, then NCX)
-      if let tocID = foundTOCID, let href = manifestItems[tocID] {
-        let tocURL = opfURL.deletingLastPathComponent().appendingPathComponent(href)
+      if let tocID = foundTOCID, let rawHref = manifestItems[tocID] {
+        let cleanHref = (rawHref.components(separatedBy: "#").first ?? rawHref).removingPercentEncoding ?? rawHref
+        let tocURL = opfURL.deletingLastPathComponent().appendingPathComponent(cleanHref)
 
         if fileManager.fileExists(atPath: tocURL.path) {
-          let isNavDoc = href.hasSuffix(".xhtml") || href.hasSuffix(".html")
+          let isNavDoc = cleanHref.hasSuffix(".xhtml") || cleanHref.hasSuffix(".html")
 
           tocItems = []
           isParsingOPF = false
@@ -226,11 +229,11 @@ class EpubParser: NSObject, XMLParserDelegate {
           let finalTOC = tocItems.map { item -> TOCItem in
             var newPath = item.path
             // Remove fragment identifier for path resolution
-            let pathWithoutFragment = newPath.components(separatedBy: "#").first ?? newPath
+            let pathWithoutFragment = (newPath.components(separatedBy: "#").first ?? newPath).removingPercentEncoding ?? newPath
             if !cleanTocPrefix.isEmpty && !pathWithoutFragment.hasPrefix("/") {
-              newPath =
-                cleanTocPrefix.isEmpty
-                ? pathWithoutFragment : "\(cleanTocPrefix)/\(pathWithoutFragment)"
+              newPath = "\(cleanTocPrefix)/\(pathWithoutFragment)"
+            } else {
+              newPath = pathWithoutFragment
             }
             return TOCItem(title: item.title, path: newPath)
           }
@@ -359,55 +362,9 @@ class EpubParser: NSObject, XMLParserDelegate {
           foundTOCID = toc
         }
       }
+
       if elementName == "itemref", let idref = attributeDict["idref"] {
         spineItemRefs.append(idref)
-      }
-
-      // Cover metadata (EPUB 2 style)
-      if elementName == "meta" {
-        if let name = attributeDict["name"], name == "cover",
-          let content = attributeDict["content"]
-        {
-          foundCoverID = content
-        }
-      }
-    }
-  }
-
-  func parser(
-    _ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?,
-    qualifiedName qName: String?
-  ) {
-
-    // Clear currentElement if it matches (fix for stuck state)
-    if currentElement == elementName {
-      currentElement = ""
-    }
-
-    // EPUB 3 Nav Document
-    if isParsingNavDoc {
-      if elementName == "nav" {
-        inNavTOC = false
-      }
-      if inNavTOC && elementName == "a" && !navLinkHref.isEmpty {
-        let title = navLinkText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !title.isEmpty {
-          tocItems.append(TOCItem(title: title, path: navLinkHref))
-        }
-        navLinkHref = ""
-        navLinkText = ""
-      }
-      return
-    }
-
-    // NCX parsing
-    if isParsingNCX {
-      if elementName == "navPoint" {
-        if !tempNavLabel.isEmpty && !tempContentSrc.isEmpty {
-          tocItems.append(TOCItem(title: tempNavLabel, path: tempContentSrc))
-        }
-        tempNavLabel = ""
-        tempContentSrc = ""
       }
     }
   }
@@ -416,13 +373,11 @@ class EpubParser: NSObject, XMLParserDelegate {
     let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
 
-    // EPUB 3 Nav Document
     if isParsingNavDoc && inNavTOC {
       navLinkText += trimmed
       return
     }
 
-    // NCX parsing
     if isParsingNCX {
       if currentElement == "text" {
         tempNavLabel += trimmed
@@ -430,13 +385,43 @@ class EpubParser: NSObject, XMLParserDelegate {
       return
     }
 
-    // OPF metadata - ONLY if isParsingOPF is true
     if isParsingOPF {
-      if currentElement == "dc:title" || currentElement == "title" {
-        foundTitle += trimmed
-      } else if currentElement == "dc:creator" || currentElement == "creator" {
-        foundAuthor += trimmed
+      switch currentElement {
+      case "dc:title", "title":
+        foundTitle += (foundTitle.isEmpty ? "" : " ") + trimmed
+      case "dc:creator", "creator":
+        foundAuthor += (foundAuthor.isEmpty ? "" : " ") + trimmed
+      default:
+        break
       }
+    }
+  }
+
+  func parser(
+    _ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?,
+    qualifiedName qName: String?
+  ) {
+    if isParsingNavDoc {
+      if inNavTOC && elementName == "a" && !navLinkHref.isEmpty {
+        let title = navLinkText.isEmpty ? "Chapter" : navLinkText
+        tocItems.append(TOCItem(title: title, path: navLinkHref))
+        navLinkHref = ""
+        navLinkText = ""
+      }
+      if elementName == "nav" {
+        inNavTOC = false
+      }
+      return
+    }
+
+    if isParsingNCX {
+      if elementName == "navPoint" && !tempContentSrc.isEmpty {
+        let title = tempNavLabel.isEmpty ? "Chapter" : tempNavLabel
+        tocItems.append(TOCItem(title: title, path: tempContentSrc))
+        tempNavLabel = ""
+        tempContentSrc = ""
+      }
+      return
     }
   }
 }

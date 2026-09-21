@@ -46,18 +46,54 @@ actor ImageCache {
         }
         
         let task = Task<PlatformImage?, Never> {
+            // 1. Try Documents directory
             let imageURL = documentsDir.appendingPathComponent(name)
+            if let data = try? Data(contentsOf: imageURL) {
+                #if canImport(UIKit)
+                if let image = UIImage(data: data) {
+                    cache.setObject(image, forKey: name as NSString)
+                    return image
+                }
+                #elseif canImport(AppKit)
+                if let image = NSImage(data: data) {
+                    cache.setObject(image, forKey: name as NSString)
+                    return image
+                }
+                #endif
+            }
             
-            guard let data = try? Data(contentsOf: imageURL) else { return nil }
-            
+            // 2. Try asset bundle
             #if canImport(UIKit)
-            guard let image = UIImage(data: data) else { return nil }
+            if let assetImage = UIImage(named: name) {
+                cache.setObject(assetImage, forKey: name as NSString)
+                return assetImage
+            }
             #elseif canImport(AppKit)
-            guard let image = NSImage(data: data) else { return nil }
+            if let assetImage = NSImage(named: NSImage.Name(name)) {
+                cache.setObject(assetImage, forKey: name as NSString)
+                return assetImage
+            }
             #endif
             
-            cache.setObject(image, forKey: name as NSString)
-            return image
+            // 3. Try direct file path if name is absolute
+            if name.hasPrefix("/") {
+                let fileURL = URL(fileURLWithPath: name)
+                if let data = try? Data(contentsOf: fileURL) {
+                    #if canImport(UIKit)
+                    if let image = UIImage(data: data) {
+                        cache.setObject(image, forKey: name as NSString)
+                        return image
+                    }
+                    #elseif canImport(AppKit)
+                    if let image = NSImage(data: data) {
+                        cache.setObject(image, forKey: name as NSString)
+                        return image
+                    }
+                    #endif
+                }
+            }
+            
+            return nil
         }
         
         loadingTasks[name] = task
@@ -71,16 +107,22 @@ actor ImageCache {
     }
 }
 
-struct CachedAsyncImage: View {
+struct CachedAsyncImage<Placeholder: View, Fallback: View>: View {
     let imageName: String
-    let placeholder: AnyView
+    let placeholder: Placeholder
+    let fallback: Fallback
     
     @State private var loadedImage: PlatformImage?
     @State private var isLoading = true
     
-    init(imageName: String, @ViewBuilder placeholder: () -> some View) {
+    init(
+        imageName: String,
+        @ViewBuilder placeholder: () -> Placeholder,
+        @ViewBuilder fallback: () -> Fallback
+    ) {
         self.imageName = imageName
-        self.placeholder = AnyView(placeholder())
+        self.placeholder = placeholder()
+        self.fallback = fallback()
     }
     
     var body: some View {
@@ -96,7 +138,7 @@ struct CachedAsyncImage: View {
             } else if isLoading {
                 placeholder
             } else {
-                placeholder
+                fallback
             }
         }
         .task(id: imageName) {
@@ -120,5 +162,12 @@ struct CachedAsyncImage: View {
             loadedImage = image
         }
         isLoading = false
+    }
+}
+
+extension CachedAsyncImage where Fallback == Placeholder {
+    init(imageName: String, @ViewBuilder placeholder: () -> Placeholder) {
+        let p = placeholder()
+        self.init(imageName: imageName, placeholder: { p }, fallback: { p })
     }
 }

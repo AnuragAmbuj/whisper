@@ -12,12 +12,11 @@ struct GlassModifier: ViewModifier {
     
     func body(content: Content) -> some View {
         content
-            .background(.ultraThinMaterial)
-            .cornerRadius(cornerRadius)
-            .shadow(DS.Shadow.glass)
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(
-                 RoundedRectangle(cornerRadius: cornerRadius)
-                    .stroke(.white.opacity(DS.Opacity.subtleStroke), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(DS.Colors.border, lineWidth: 1)
             )
     }
 }

@@ -15,16 +15,21 @@ class ReaderViewModel {
     var theme: AppTheme
     var fontSize: Double = 18.0
     var lineHeight: CGFloat = 1.8
+    var fontName: String = "Serif"
     var isBookmarked: Bool = false
+    var currentLocation: Int = 0
     
     private let keyThemeStyle = "reader_theme_style"
     private let keyFontSize = "reader_fontSize"
     private let keyLineHeight = "reader_lineHeight"
+    private let keyFontName = "reader_font_name"
     
     init(book: Book) {
         self.book = book
         self.theme = AppTheme()
+        self.currentLocation = Int(book.progress * 100)
         loadSettings()
+        checkIfBookmarked()
     }
     
     private func loadSettings() {
@@ -44,39 +49,55 @@ class ReaderViewModel {
             lineHeight = savedLineHeight
             theme.lineHeight = savedLineHeight
         }
+        
+        if let savedFontName = UserDefaults.standard.string(forKey: keyFontName), !savedFontName.isEmpty {
+            fontName = savedFontName
+            theme.fontName = savedFontName
+        }
     }
     
     private func saveSettings() {
         UserDefaults.standard.set(theme.style.rawValue, forKey: keyThemeStyle)
         UserDefaults.standard.set(fontSize, forKey: keyFontSize)
         UserDefaults.standard.set(lineHeight, forKey: keyLineHeight)
+        UserDefaults.standard.set(fontName, forKey: keyFontName)
     }
     
     func updateProgress(_ newProgress: Double) {
-        book.progress = newProgress
+        book.progress = min(max(newProgress, 0.0), 1.0)
         book.lastReadDate = Date()
     }
     
+    func updateLocation(_ location: Int) {
+        currentLocation = location
+        checkIfBookmarked()
+    }
+    
+    func checkIfBookmarked() {
+        isBookmarked = (book.bookmarks ?? []).contains(where: { $0.pageOrLocation == currentLocation })
+    }
+    
     func toggleTheme() {
-        switch theme.style {
-        case .default:
-            theme = AppTheme(style: .dark)
-        case .dark:
-            theme = AppTheme(style: .sepia)
-        case .sepia:
-            theme = AppTheme(style: .light)
-        case .light:
-            theme = AppTheme(style: .default)
+        let allStyles = AppTheme.ThemeStyle.allCases
+        if let currentIndex = allStyles.firstIndex(of: theme.style) {
+            let nextIndex = (currentIndex + 1) % allStyles.count
+            setTheme(allStyles[nextIndex])
+        } else {
+            setTheme(.default)
         }
-        theme.fontSize = fontSize
-        theme.lineHeight = lineHeight
-        saveSettings()
     }
     
     func setTheme(_ style: AppTheme.ThemeStyle) {
         theme = AppTheme(style: style)
         theme.fontSize = fontSize
         theme.lineHeight = lineHeight
+        theme.fontName = fontName
+        saveSettings()
+    }
+    
+    func setFontName(_ name: String) {
+        fontName = name
+        theme.fontName = name
         saveSettings()
     }
     
@@ -105,28 +126,44 @@ class ReaderViewModel {
     }
     
     func toggleBookmark() {
-        guard !isBookmarked else { return }
-        
-        let newBookmark = Bookmark(
-            pageOrLocation: Int(book.progress * 100),
-            note: "Saved at \(Date().formatted(date: .numeric, time: .shortened))"
-        )
-        
-        book.bookmarks.append(newBookmark)
-        isBookmarked = true
+        if isBookmarked {
+            if let index = (book.bookmarks ?? []).firstIndex(where: { $0.pageOrLocation == currentLocation }) {
+                book.bookmarks?.remove(at: index)
+            } else if !(book.bookmarks ?? []).isEmpty {
+                book.bookmarks?.removeLast()
+            }
+            isBookmarked = false
+        } else {
+            let noteText: String
+            switch book.format ?? .text {
+            case .pdf, .comic:
+                noteText = "Page \(currentLocation + 1)"
+            case .epub:
+                noteText = "Chapter \(currentLocation + 1)"
+            case .text:
+                noteText = "\(currentLocation)% completed"
+            }
+            
+            let newBookmark = Bookmark(
+                pageOrLocation: currentLocation,
+                note: "\(noteText) • \(Date().formatted(date: .abbreviated, time: .shortened))"
+            )
+            book.addBookmark(newBookmark)
+            isBookmarked = true
+        }
     }
     
     func removeBookmark(_ bookmark: Bookmark) {
-        if let index = book.bookmarks.firstIndex(where: { $0.id == bookmark.id }) {
-            book.bookmarks.remove(at: index)
-            if book.bookmarks.isEmpty {
+        if let index = (book.bookmarks ?? []).firstIndex(where: { $0.id == bookmark.id }) {
+            book.bookmarks?.remove(at: index)
+            if (book.bookmarks ?? []).isEmpty {
                 isBookmarked = false
             }
         }
     }
     
     func removeAllBookmarks() {
-        book.bookmarks.removeAll()
+        book.bookmarks?.removeAll()
         isBookmarked = false
     }
 }

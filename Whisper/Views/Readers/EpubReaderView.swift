@@ -5,432 +5,384 @@
 //  Created by Anurag Ambuj on 29/12/25.
 //
 
+import Combine
 import SwiftUI
 import WebKit
 
-struct EpubReaderView: View {
-  let bookDir: URL
-  let theme: AppTheme
-  let fontSize: Double
+enum EpubReadingMode: String, CaseIterable, Identifiable {
+  case paginated = "Pages"
+  case scroll = "Scroll"
 
-  @State private var webView: WKWebView?
-  @State private var chapterPaths: [String] = []
-  @State private var currentChapterIndex = 0
-  @State private var isLoading = true
-  @State private var isShowingTOC = false
+  var id: String { rawValue }
 
-  // Pagination State (Visual only, source of truth is JS)
-  @State private var currentPage = 1
-  @State private var totalPages = 1
+  var icon: String {
+    switch self {
+    case .paginated: return "book.pages"
+    case .scroll: return "doc.text.below.ecg"
+    }
+  }
+}
 
-  init(bookDir: URL, theme: AppTheme = .default, fontSize: Double = 18.0) {
+// MARK: - Dedicated Controller for WebKit Navigation & Reading Engine
+@MainActor
+final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelegate {
+  @Published var isLoading: Bool = true
+  @Published var currentPage: Int = 1
+  @Published var totalPages: Int = 1
+  @Published var scrollPercentage: Double = 0.0
+  @Published var readingMode: EpubReadingMode = .paginated
+  @Published var errorMessage: String? = nil
+
+  var webView: WKWebView?
+  private(set) var bookDir: URL
+  private var currentChapterURL: URL?
+  private var watchdogTask: Task<Void, Never>?
+
+  var onProgressUpdated: ((Double) -> Void)?
+
+  init(bookDir: URL) {
     self.bookDir = bookDir
-    self.theme = theme
-    self.fontSize = fontSize
+    super.init()
   }
 
-  var body: some View {
-    ZStack(alignment: .bottom) {
-      theme.backgroundColor
-        .ignoresSafeArea()
-
-      if let webView = webView {
-        WebViewContainer(webView: webView)
-          .edgesIgnoringSafeArea(.all)
-          .opacity(isLoading ? 0 : 1)
-      }
-
-      if isLoading {
-        ProgressView()
-          .progressViewStyle(CircularProgressViewStyle(tint: theme.textColor))
-          .scaleEffect(1.5)
-      }
-
-      // HUD Overlay
-      if !isLoading && !chapterPaths.isEmpty {
-        VStack {
-          Spacer()
-          HStack {
-            // Previous
-            Button(action: previousPageOrChapter) {
-              Image(systemName: "chevron.left")
-                .font(.title3)
-                .padding(12)
-                .background(.ultraThinMaterial)
-                .clipShape(Circle())
-            }
-            .foregroundColor(theme.textColor)
-
-            Spacer()
-
-            // TOC
-            Button(action: { isShowingTOC = true }) {
-              VStack(spacing: 2) {
-                Text("Chapter \(currentChapterIndex + 1)")
-                  .font(.caption.bold())
-                Text("Page \(currentPage) of \(totalPages)")
-                  .font(.caption2)
-              }
-              .padding(.horizontal, 16)
-              .padding(.vertical, 8)
-              .background(.ultraThinMaterial)
-              .cornerRadius(20)
-            }
-            .foregroundColor(theme.textColor)
-
-            Spacer()
-
-            // Next
-            Button(action: nextPageOrChapter) {
-              Image(systemName: "chevron.right")
-                .font(.title3)
-                .padding(12)
-                .background(.ultraThinMaterial)
-                .clipShape(Circle())
-            }
-            .foregroundColor(theme.textColor)
-          }
-          .padding(.horizontal, 20)
-          .padding(.bottom, 20)
-        }
-      }
-    }
-    .sheet(isPresented: $isShowingTOC) {
-      tocSheet
-    }
-    .task {
-      setupWebView()
-      await loadEpubAsync()
-    }
-    .onChange(of: currentChapterIndex) { _, newIndex in
-      loadChapter(at: newIndex)
-    }
-    .onChange(of: theme.style) { _, _ in updateAppearance() }
-    .onChange(of: theme.isDarkMode) { _, _ in updateAppearance() }
-    .onChange(of: fontSize) { _, _ in updateAppearance() }
-  }
-
-  private var tocSheet: some View {
-    NavigationStack {
-      List {
-        ForEach(0..<chapterPaths.count, id: \.self) { index in
-          Button(action: {
-            currentChapterIndex = index
-            isShowingTOC = false
-          }) {
-            HStack {
-              Text("Chapter \(index + 1)")
-                .foregroundColor(index == currentChapterIndex ? .accentColor : .primary)
-              Spacer()
-              if index == currentChapterIndex {
-                Image(systemName: "checkmark")
-                  .foregroundColor(.accentColor)
-              }
-            }
-          }
-        }
-      }
-      .navigationTitle("Table of Contents")
-      #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-      #endif
-      .toolbar {
-        ToolbarItem(placement: .cancellationAction) {
-          Button("Done") {
-            isShowingTOC = false
-          }
-        }
-      }
-    }
-    .presentationDetents([.medium, .large])
-  }
-
-  private func setupWebView() {
-    let webView = WebKitWarmer.shared.createWebView(allowFileAccess: true)
+  func attach(webView: WKWebView) {
+    self.webView = webView
+    webView.navigationDelegate = self
 
     #if os(iOS)
-      webView.isOpaque = false
-      webView.backgroundColor = UIColor.clear
-      webView.scrollView.backgroundColor = UIColor.clear
-      webView.scrollView.contentInsetAdjustmentBehavior = .never
-      webView.scrollView.isScrollEnabled = false
+      webView.scrollView.bounces = true
+      webView.scrollView.alwaysBounceVertical = (readingMode == .scroll)
+      webView.scrollView.showsVerticalScrollIndicator = (readingMode == .scroll)
+      webView.scrollView.showsHorizontalScrollIndicator = false
+      webView.scrollView.minimumZoomScale = 1.0
+      webView.scrollView.maximumZoomScale = 4.0
     #else
-      webView.setValue(false, forKey: "drawsBackground")
+      webView.allowsMagnification = true
     #endif
-
-    webView.navigationDelegate = contextCoordinator
-    self.webView = webView
   }
 
-  // We need a coordinator for WKNavigationDelegate to handle load completion
-  private class Coordinator: NSObject, WKNavigationDelegate {
-    var parent: EpubReaderView
-
-    init(_ parent: EpubReaderView) {
-      self.parent = parent
-    }
-
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-      print("EpubReader: WebView finished loading")
-      // Inject CSS and JS after load
-      parent.injectReadingSystem()
-    }
-
-    func webView(
-      _ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
-      withError error: Error
-    ) {
-      print("EpubReader: WebLoad Error: \(error.localizedDescription)")
-    }
-  }
-
-  @State private var coordinator: Coordinator?
-
-  private var contextCoordinator: Coordinator {
-    if let existing = coordinator { return existing }
-    let new = Coordinator(self)
-    // Store in state to keep alive
-    DispatchQueue.main.async { self.coordinator = new }
-    return new
-  }
-
-  // MARK: - Safe Navigation Logic
-
-  private func previousPageOrChapter() {
+  func loadChapter(at url: URL, theme: AppTheme, fontSize: Double) {
     guard let webView = webView else { return }
-
-    // Ask JS to try scrolling back
-    webView.evaluateJavaScript("tryScrollPrev()") { result, _ in
-      if let success = result as? Bool, success {
-        // Scrolled successfully, update current page
-        self.currentPage = max(1, self.currentPage - 1)
-      } else {
-        // Must be at start, go to prev chapter
-        if self.currentChapterIndex > 0 {
-          self.currentChapterIndex -= 1
-          // When going back a chapter, we ideally want to land on the LAST page.
-          // This implementation defaults to first page for stability.
-          // To do last page, we'd need another JS param.
-        }
-      }
-    }
-  }
-
-  private func nextPageOrChapter() {
-    guard let webView = webView else { return }
-
-    // Ask JS to try scrolling next
-    webView.evaluateJavaScript("tryScrollNext()") { result, _ in
-      if let success = result as? Bool, success {
-        // Scrolled successfully
-        self.currentPage = min(self.totalPages, self.currentPage + 1)
-      } else {
-        // At end, go to next chapter
-        if self.currentChapterIndex < self.chapterPaths.count - 1 {
-          self.currentChapterIndex += 1
-        }
-      }
-    }
-  }
-
-  // MARK: - Loading & Injection
-
-  private func loadEpubAsync() async {
-    // Re-using existing logic but moved to background task
-
-    let paths = await Task.detached(priority: .userInitiated) { [bookDir] () -> [String] in
-      let spineURL = bookDir.appendingPathComponent("spine.json")
-      guard let data = try? Data(contentsOf: spineURL),
-        let relativePaths = try? JSONDecoder().decode([String].self, from: data)
-      else {
-        return []
-      }
-      return relativePaths.map { bookDir.appendingPathComponent($0).path }
-    }.value
-
-    chapterPaths = paths
-
-    if !chapterPaths.isEmpty {
-      DispatchQueue.main.async {
-        loadChapter(at: 0)
-      }
-    }
-  }
-
-  private func loadChapter(at index: Int) {
-    guard index >= 0, index < chapterPaths.count, let webView = webView else { return }
-
+    currentChapterURL = url
     isLoading = true
-    // Reset page count visual state
     currentPage = 1
     totalPages = 1
+    errorMessage = nil
 
-    let chapterPath = chapterPaths[index]
-    let chapterURL = URL(fileURLWithPath: chapterPath)
+    // 3-second safety watchdog ensures loader never hangs indefinitely
+    watchdogTask?.cancel()
+    watchdogTask = Task { @MainActor [weak self] in
+      try? await Task.sleep(nanoseconds: 3_000_000_000)
+      guard let self = self, self.isLoading else { return }
+      print("EpubReaderController: Safety timeout reached, force-revealing content")
+      self.injectReaderCSS(theme: theme, fontSize: fontSize)
+      self.isLoading = false
+    }
 
-    // IMPORTANT: Read access to the BOOK directory, not just chapter
-    webView.loadFileURL(chapterURL, allowingReadAccessTo: bookDir)
-  }
-
-  private func injectReadingSystem() {
-    guard let webView = webView else { return }
-
-    // Robust CSS with break protection
-    let css = """
-      :root {
-          --bg-color: \(hexString(from: theme.backgroundColor));
-          --text-color: \(hexString(from: theme.textColor));
-          --font-size: \(fontSize)px;
-          --line-height: \(theme.lineHeight);
-      }
-
-      html, body {
-          height: 100vh;
-          width: 100vw;
-          margin: 0;
-          padding: 0;
-          overflow: hidden;
-          background-color: var(--bg-color) !important;
-          color: var(--text-color) !important;
-      }
-
-      body {
-          font-size: var(--font-size) !important;
-          line-height: var(--line-height) !important;
-          font-family: -apple-system, system-ui, sans-serif;
-          
-          /* Column Layout for Horizontal Pagination */
-          column-width: 100vw;
-          column-gap: 0;
-          column-fill: auto;
-          
-          /* Padding must be handled carefully with columns */
-          padding: 20px 20px 40px 20px;
-          box-sizing: border-box;
-          
-          -webkit-text-size-adjust: none;
-      }
-
-      /* Prevent content from breaking layout */
-      img, video, svg {
-          max-width: 100%;
-          height: auto;
-          max-height: 90vh;
-          object-fit: contain;
-          break-inside: avoid;
-      }
-
-      p, h1, h2, h3, h4, h5, h6, li, blockquote {
-          break-inside: avoid; /* Try to keep paragraphs together */
-      }
-
-      * {
-          background-color: transparent !important;
-          color: inherit !important;
-      }
-      """
-
-    // Robust JS with Tolerances
-    let jsConfig = """
-      // Inject CSS
-      var style = document.createElement('style');
-      style.innerHTML = `\(css)`;
-      document.head.appendChild(style);
-
-      // Prevent default touch/scroll actions
-      document.addEventListener('touchmove', function(e) { e.preventDefault(); }, { passive: false });
-
-      function getPageWidth() {
-          return window.innerWidth;
-      }
-
-      function updateMetrics() {
-          var scrollW = document.body.scrollWidth;
-          var winW = window.innerWidth;
-          var pages = Math.max(1, Math.ceil(scrollW / winW));
-          
-          // Current Page Calculation
-          var currentScroll = window.scrollX;
-          var page = Math.floor(currentScroll / winW) + 1;
-          
-          return {
-              totalPages: pages,
-              currentPage: page
-          };
-      }
-
-      function tryScrollNext() {
-          var currentX = window.scrollX;
-          var winW = window.innerWidth;
-          var limit = document.body.scrollWidth;
-          
-          // Tolerance of 5px to account for subpixel rendering
-          if (currentX + winW < limit - 5) {
-              window.scrollBy({ left: winW, behavior: 'smooth' });
-              return true;
-          }
-          return false;
-      }
-
-      function tryScrollPrev() {
-          var currentX = window.scrollX;
-          var winW = window.innerWidth;
-          
-          if (currentX - winW >= -5) {
-              window.scrollBy({ left: -winW, behavior: 'smooth' });
-              return true;
-          }
-          return false;
-      }
-
-      // Initial Calculation
-      updateMetrics();
-      """
-
-    webView.evaluateJavaScript(jsConfig) { result, error in
-      if let error = error {
-        print("JS Logic Error: \(error)")
-      } else if let dict = result as? [String: Any],
-        let pages = dict["totalPages"] as? Int
-      {
-        self.totalPages = pages
-        self.isLoading = false
+    if FileManager.default.fileExists(atPath: url.path) {
+      webView.loadFileURL(url, allowingReadAccessTo: bookDir)
+    } else {
+      // Direct string fallback if file path resolution differs
+      if let content = try? String(contentsOf: url, encoding: .utf8) {
+        webView.loadHTMLString(content, baseURL: url.deletingLastPathComponent())
       } else {
-        // Fallback
-        self.totalPages = 1
-        self.isLoading = false
+        isLoading = false
+        errorMessage = "Unable to open chapter at: \(url.lastPathComponent)"
       }
     }
   }
 
-  private func updateAppearance() {
+  // MARK: - WKNavigationDelegate
+
+  nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+    Task { @MainActor in
+      self.watchdogTask?.cancel()
+      print("EpubReaderController: Chapter loaded successfully")
+      self.injectReaderCSS(theme: self.cachedTheme, fontSize: self.cachedFontSize)
+    }
+  }
+
+  nonisolated func webView(
+    _ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error
+  ) {
+    Task { @MainActor in
+      self.watchdogTask?.cancel()
+      print("EpubReaderController: Navigation failed: \(error.localizedDescription)")
+      self.isLoading = false
+    }
+  }
+
+  nonisolated func webView(
+    _ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
+    withError error: Error
+  ) {
+    Task { @MainActor in
+      self.watchdogTask?.cancel()
+      print("EpubReaderController: Provisional navigation failed: \(error.localizedDescription)")
+      self.isLoading = false
+    }
+  }
+
+  // MARK: - Script Injection & Styling
+
+  private var cachedTheme: AppTheme = .default
+  private var cachedFontSize: Double = 19.0
+
+  func updateThemeAndFont(theme: AppTheme, fontSize: Double) {
+    self.cachedTheme = theme
+    self.cachedFontSize = fontSize
+    injectReaderCSS(theme: theme, fontSize: fontSize)
+  }
+
+  func setReadingMode(_ mode: EpubReadingMode) {
+    self.readingMode = mode
+    #if os(iOS)
+      webView?.scrollView.alwaysBounceVertical = (mode == .scroll)
+      webView?.scrollView.showsVerticalScrollIndicator = (mode == .scroll)
+    #endif
+    injectReaderCSS(theme: cachedTheme, fontSize: cachedFontSize)
+  }
+
+  func injectReaderCSS(theme: AppTheme, fontSize: Double) {
     guard let webView = webView else { return }
 
-    let cssUpdate = """
-      document.documentElement.style.setProperty('--bg-color', '\(hexString(from: theme.backgroundColor))');
-      document.documentElement.style.setProperty('--text-color', '\(hexString(from: theme.textColor))');
-      document.documentElement.style.setProperty('--font-size', '\(fontSize)px');
+    let bgHex = hexString(from: theme.backgroundColor)
+    let textHex = hexString(from: theme.textColor)
+    let fontCSS = fontFamilyCSS(for: theme.fontName)
 
-      // Return metrics for UI update
-      updateMetrics();
-      """
+    let isPaged = (readingMode == .paginated)
 
-    webView.evaluateJavaScript(cssUpdate) { result, _ in
-      if let dict = result as? [String: Any],
-        let pages = dict["totalPages"] as? Int
-      {
-        self.totalPages = pages
-        // If current page > total, snap back
-        if self.currentPage > pages {
-          self.currentPage = pages
-          let script = "window.scrollTo((3000000), 0);"  // Scroll to end
-          webView.evaluateJavaScript(script)
+    let js = """
+      (function() {
+        // 1. Ensure viewport meta tag exists and enables pinch to zoom
+        var meta = document.querySelector('meta[name="viewport"]');
+        if (!meta) {
+          meta = document.createElement('meta');
+          meta.name = 'viewport';
+          document.head.appendChild(meta);
+        }
+        meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes';
+
+        // 2. Remove any prior Whisper styling
+        var oldStyle = document.getElementById('whisper-reader-style');
+        if (oldStyle) oldStyle.remove();
+
+        // 3. Inject new layout and typography style
+        var style = document.createElement('style');
+        style.id = 'whisper-reader-style';
+        style.textContent = `
+          :root {
+            --whisper-bg: \(bgHex);
+            --whisper-text: \(textHex);
+            --whisper-font-size: \(fontSize)px;
+            --whisper-line-height: \(theme.lineHeight);
+          }
+
+          * {
+            box-sizing: border-box !important;
+            -webkit-tap-highlight-color: transparent;
+          }
+
+          html {
+            background-color: var(--whisper-bg) !important;
+            color: var(--whisper-text) !important;
+            -webkit-text-size-adjust: 100% !important;
+            \(isPaged ? "overflow-x: scroll !important; overflow-y: hidden !important; scrollbar-width: none !important;" : "overflow-y: auto !important; overflow-x: hidden !important;")
+          }
+
+          html::-webkit-scrollbar { display: none !important; }
+
+          body {
+            background-color: var(--whisper-bg) !important;
+            color: var(--whisper-text) !important;
+            font-size: var(--whisper-font-size) !important;
+            line-height: var(--whisper-line-height) !important;
+            font-family: \(fontCSS) !important;
+            margin: 0 !important;
+            word-wrap: break-word !important;
+            overflow-wrap: break-word !important;
+            \(isPaged ?
+              "height: calc(100vh - 120px) !important; width: 100vw !important; padding: 24px 20px 80px 20px !important; column-width: calc(100vw - 40px) !important; column-gap: 40px !important; column-fill: auto !important;"
+              :
+              "max-width: 760px !important; margin: 0 auto !important; padding: 32px 24px 120px 24px !important;"
+            )
+          }
+
+          p, div, span, li, blockquote, dd, dt {
+            color: var(--whisper-text) !important;
+            font-size: 1em !important;
+            line-height: inherit !important;
+          }
+
+          h1, h2, h3, h4, h5, h6 {
+            color: var(--whisper-text) !important;
+            font-weight: 700 !important;
+            line-height: 1.3 !important;
+            margin-top: 1.2em !important;
+            margin-bottom: 0.6em !important;
+          }
+          h1 { font-size: 1.6em !important; }
+          h2 { font-size: 1.35em !important; }
+          h3 { font-size: 1.2em !important; }
+
+          p {
+            margin: 0 0 1em 0 !important;
+            text-align: justify !important;
+            text-justify: inter-word !important;
+          }
+
+          img, svg, video {
+            max-width: 100% !important;
+            height: auto !important;
+            display: block !important;
+            margin: 16px auto !important;
+            border-radius: 8px !important;
+          }
+
+          table {
+            max-width: 100% !important;
+            border-collapse: collapse !important;
+            margin: 16px 0 !important;
+          }
+
+          a {
+            color: inherit !important;
+            text-decoration: underline !important;
+          }
+        `;
+        document.head.appendChild(style);
+
+        // 4. Calculate metrics
+        var winW = window.innerWidth || document.documentElement.clientWidth || 390;
+        var scrollW = document.documentElement.scrollWidth || document.body.scrollWidth || winW;
+        var pages = Math.max(1, Math.round(scrollW / winW));
+        var currentScrollX = window.scrollX || document.documentElement.scrollLeft || 0;
+        var currPage = Math.min(pages, Math.max(1, Math.round(currentScrollX / winW) + 1));
+
+        return {
+          totalPages: pages,
+          currentPage: currPage
+        };
+      })();
+    """
+
+    webView.evaluateJavaScript(js) { [weak self] result, error in
+      guard let self = self else { return }
+      if let error = error {
+        print("EpubReaderController: Script evaluation warning: \(error.localizedDescription)")
+      } else if let dict = result as? [String: Any] {
+        if let total = dict["totalPages"] as? Int {
+          self.totalPages = max(1, total)
+        }
+        if let current = dict["currentPage"] as? Int {
+          self.currentPage = max(1, min(self.totalPages, current))
         }
       }
+      withAnimation(.easeOut(duration: 0.25)) {
+        self.isLoading = false
+      }
     }
   }
 
-  // Helper for Color to Hex
+  // MARK: - Navigation Control
+
+  func nextPage(onChapterEnd: @escaping () -> Void) {
+    guard let webView = webView else { return }
+
+    if readingMode == .scroll {
+      // Scroll down by 80% viewport
+      webView.evaluateJavaScript("window.scrollBy({ top: window.innerHeight * 0.8, behavior: 'smooth' });")
+      return
+    }
+
+    let js = """
+      (function() {
+        var winW = window.innerWidth;
+        var totalW = document.documentElement.scrollWidth;
+        var pages = Math.max(1, Math.round(totalW / winW));
+        var curr = Math.min(pages, Math.max(1, Math.round(window.scrollX / winW) + 1));
+        if (curr < pages) {
+          var targetX = curr * winW;
+          window.scrollTo({ left: targetX, top: 0, behavior: 'smooth' });
+          return { handled: true, page: curr + 1, total: pages };
+        }
+        return { handled: false, page: curr, total: pages };
+      })();
+    """
+
+    webView.evaluateJavaScript(js) { [weak self] result, _ in
+      guard let self = self else { return }
+      if let dict = result as? [String: Any],
+        let handled = dict["handled"] as? Bool
+      {
+        if handled, let page = dict["page"] as? Int {
+          self.currentPage = page
+        } else {
+          onChapterEnd()
+        }
+      } else {
+        onChapterEnd()
+      }
+    }
+  }
+
+  func previousPage(onChapterStart: @escaping () -> Void) {
+    guard let webView = webView else { return }
+
+    if readingMode == .scroll {
+      // Scroll up by 80% viewport
+      webView.evaluateJavaScript("window.scrollBy({ top: -window.innerHeight * 0.8, behavior: 'smooth' });")
+      return
+    }
+
+    let js = """
+      (function() {
+        var winW = window.innerWidth;
+        var totalW = document.documentElement.scrollWidth;
+        var pages = Math.max(1, Math.round(totalW / winW));
+        var curr = Math.min(pages, Math.max(1, Math.round(window.scrollX / winW) + 1));
+        if (curr > 1) {
+          var targetX = (curr - 2) * winW;
+          window.scrollTo({ left: targetX, top: 0, behavior: 'smooth' });
+          return { handled: true, page: curr - 1, total: pages };
+        }
+        return { handled: false, page: curr, total: pages };
+      })();
+    """
+
+    webView.evaluateJavaScript(js) { [weak self] result, _ in
+      guard let self = self else { return }
+      if let dict = result as? [String: Any],
+        let handled = dict["handled"] as? Bool
+      {
+        if handled, let page = dict["page"] as? Int {
+          self.currentPage = page
+        } else {
+          onChapterStart()
+        }
+      } else {
+        onChapterStart()
+      }
+    }
+  }
+
+  // MARK: - Helpers
+
+  private func fontFamilyCSS(for fontName: String) -> String {
+    switch fontName.lowercased() {
+    case "serif":
+      return "Charter, Georgia, 'Times New Roman', serif"
+    case "sans", "system":
+      return "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', sans-serif"
+    case "mono", "monospace":
+      return "ui-monospace, Menlo, Monaco, 'Courier New', monospace"
+    case "round", "rounded":
+      return "-apple-system-rounded, 'SF Pro Rounded', 'Avenir', sans-serif"
+    default:
+      return "'\(fontName)', Charter, -apple-system, serif"
+    }
+  }
+
   private func hexString(from color: Color) -> String {
     #if os(iOS)
       let uiColor = UIColor(color)
@@ -450,6 +402,359 @@ struct EpubReaderView: View {
   }
 }
 
+// MARK: - Main EPUB Reader View
+struct EpubReaderView: View {
+  let bookDir: URL
+  let theme: AppTheme
+  let fontSize: Double
+  var bookTitle: String = ""
+  var onProgressChanged: ((Double) -> Void)? = nil
+
+  @StateObject private var controller: EpubReaderController
+  @State private var chapterPaths: [String] = []
+  @State private var currentChapterIndex: Int = 0
+  @State private var isShowingTOC: Bool = false
+  @State private var showHUD: Bool = true
+
+  init(
+    bookDir: URL,
+    theme: AppTheme = .default,
+    fontSize: Double = 19.0,
+    bookTitle: String = "",
+    onProgressChanged: ((Double) -> Void)? = nil
+  ) {
+    self.bookDir = bookDir
+    self.theme = theme
+    self.fontSize = fontSize
+    self.bookTitle = bookTitle
+    self.onProgressChanged = onProgressChanged
+    _controller = StateObject(wrappedValue: EpubReaderController(bookDir: bookDir))
+  }
+
+  var body: some View {
+    ZStack(alignment: .bottom) {
+      theme.backgroundColor
+        .ignoresSafeArea()
+
+      // Core WebKit Canvas
+      if let webView = controller.webView {
+        WebViewContainer(webView: webView)
+          .edgesIgnoringSafeArea(.all)
+          .opacity(controller.isLoading ? 0 : 1)
+          .animation(.easeInOut(duration: 0.25), value: controller.isLoading)
+      }
+
+      // Invisible Tap Zones for Page Navigation & HUD Toggle
+      HStack(spacing: 0) {
+        // Left zone: Previous page
+        Color.clear
+          .frame(width: 80)
+          .contentShape(Rectangle())
+          .onTapGesture {
+            previousPageOrChapter()
+          }
+
+        // Center zone: Toggle HUD
+        Color.clear
+          .frame(maxWidth: .infinity)
+          .contentShape(Rectangle())
+          .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.2)) {
+              showHUD.toggle()
+            }
+          }
+
+        // Right zone: Next page
+        Color.clear
+          .frame(width: 80)
+          .contentShape(Rectangle())
+          .onTapGesture {
+            nextPageOrChapter()
+          }
+      }
+      .ignoresSafeArea()
+
+      // Horizontal Swipe Gesture for Paginated Mode
+      if controller.readingMode == .paginated {
+        Color.clear
+          .contentShape(Rectangle())
+          .allowsHitTesting(false)
+          .gesture(
+            DragGesture(minimumDistance: 35, coordinateSpace: .local)
+              .onEnded { value in
+                if value.translation.width < -50 {
+                  nextPageOrChapter()
+                } else if value.translation.width > 50 {
+                  previousPageOrChapter()
+                }
+              }
+          )
+      }
+
+      // Interactive Modern Loader Animation
+      if controller.isLoading {
+        InteractiveReaderLoaderView(
+          bookTitle: bookTitle,
+          chapterTitle: currentChapterDisplayName,
+          theme: theme,
+          onSkip: {
+            withAnimation(.easeOut(duration: 0.2)) {
+              controller.isLoading = false
+            }
+          }
+        )
+        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+        .zIndex(10)
+      }
+
+      // HUD Bottom Navigation Pill
+      if showHUD && !controller.isLoading && !chapterPaths.isEmpty {
+        VStack(spacing: 0) {
+          Spacer()
+
+          HStack(spacing: DS.Spacing.md) {
+            // Previous Chapter / Page Button
+            Button(action: previousPageOrChapter) {
+              Image(systemName: "chevron.left")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(theme.textColor)
+                .frame(width: 40, height: 40)
+                .background(.ultraThinMaterial)
+                .clipShape(Circle())
+                .overlay(
+                  Circle()
+                    .stroke(theme.textColor.opacity(0.12), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            // TOC & Page Indicator
+            Button(action: { isShowingTOC = true }) {
+              HStack(spacing: DS.Spacing.xs) {
+                Image(systemName: "list.bullet")
+                  .font(.caption2.weight(.bold))
+
+                VStack(spacing: 1) {
+                  Text("Chapter \(currentChapterIndex + 1) of \(chapterPaths.count)")
+                    .font(.caption.weight(.semibold))
+
+                  if controller.readingMode == .paginated {
+                    Text("Page \(controller.currentPage) of \(controller.totalPages)")
+                      .font(.caption2)
+                      .foregroundColor(theme.textColor.opacity(0.7))
+                  } else {
+                    Text("Scroll Mode")
+                      .font(.caption2)
+                      .foregroundColor(theme.textColor.opacity(0.7))
+                  }
+                }
+              }
+              .foregroundColor(theme.textColor)
+              .padding(.horizontal, DS.Spacing.lg)
+              .padding(.vertical, DS.Spacing.sm)
+              .background(.ultraThinMaterial)
+              .cornerRadius(22)
+              .overlay(
+                RoundedRectangle(cornerRadius: 22)
+                  .stroke(theme.textColor.opacity(0.12), lineWidth: 1)
+              )
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            // Reading Mode Switcher (Pages vs Scroll)
+            Button(action: toggleReadingMode) {
+              Image(systemName: controller.readingMode.icon)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(theme.textColor)
+                .frame(width: 40, height: 40)
+                .background(.ultraThinMaterial)
+                .clipShape(Circle())
+                .overlay(
+                  Circle()
+                    .stroke(theme.textColor.opacity(0.12), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+
+            // Next Chapter / Page Button
+            Button(action: nextPageOrChapter) {
+              Image(systemName: "chevron.right")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(theme.textColor)
+                .frame(width: 40, height: 40)
+                .background(.ultraThinMaterial)
+                .clipShape(Circle())
+                .overlay(
+                  Circle()
+                    .stroke(theme.textColor.opacity(0.12), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+          }
+          .padding(.horizontal, DS.Spacing.xl)
+          .padding(.bottom, DS.Spacing.xl)
+        }
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .zIndex(5)
+      }
+    }
+    .sheet(isPresented: $isShowingTOC) {
+      ChapterListView(
+        bookDir: bookDir,
+        chapterPaths: chapterPaths,
+        isPresented: $isShowingTOC
+      ) { selectedPath in
+        if let index = chapterPaths.firstIndex(where: {
+          $0 == selectedPath || $0.hasSuffix(selectedPath) || selectedPath.hasSuffix($0)
+        }) {
+          currentChapterIndex = index
+        }
+      }
+    }
+    .task {
+      setupAndLoad()
+    }
+    .onChange(of: currentChapterIndex) { _, newIndex in
+      loadChapter(at: newIndex)
+      if !chapterPaths.isEmpty {
+        let prog = Double(newIndex) / Double(max(1, chapterPaths.count))
+        onProgressChanged?(prog)
+      }
+    }
+    .onChange(of: theme.style) { _, _ in
+      controller.updateThemeAndFont(theme: theme, fontSize: fontSize)
+    }
+    .onChange(of: theme.isDarkMode) { _, _ in
+      controller.updateThemeAndFont(theme: theme, fontSize: fontSize)
+    }
+    .onChange(of: fontSize) { _, newSize in
+      controller.updateThemeAndFont(theme: theme, fontSize: newSize)
+    }
+  }
+
+  // MARK: - Setup and Initialization
+
+  private func setupAndLoad() {
+    let webView = WebKitWarmer.shared.createWebView(allowFileAccess: true)
+    controller.attach(webView: webView)
+
+    Task {
+      let paths = await resolveChapterPaths(bookDir: bookDir)
+      await MainActor.run {
+        self.chapterPaths = paths
+        if !paths.isEmpty {
+          self.loadChapter(at: self.currentChapterIndex)
+        } else {
+          self.controller.isLoading = false
+          self.controller.errorMessage = "No readable chapters found."
+        }
+      }
+    }
+  }
+
+  private var currentChapterDisplayName: String {
+    guard currentChapterIndex < chapterPaths.count else { return "Reading EPUB..." }
+    let rawPath = chapterPaths[currentChapterIndex]
+    let name = URL(fileURLWithPath: rawPath).deletingPathExtension().lastPathComponent
+    let cleaned = name.replacingOccurrences(of: "_", with: " ")
+      .replacingOccurrences(of: "-", with: " ")
+      .capitalized
+    return cleaned.isEmpty ? "Chapter \(currentChapterIndex + 1)" : cleaned
+  }
+
+  private func loadChapter(at index: Int) {
+    guard index >= 0, index < chapterPaths.count else { return }
+    let path = chapterPaths[index]
+    let url = URL(fileURLWithPath: path)
+    controller.loadChapter(at: url, theme: theme, fontSize: fontSize)
+  }
+
+  private func toggleReadingMode() {
+    let next: EpubReadingMode = (controller.readingMode == .paginated) ? .scroll : .paginated
+    controller.setReadingMode(next)
+  }
+
+  private func nextPageOrChapter() {
+    controller.nextPage {
+      if self.currentChapterIndex < self.chapterPaths.count - 1 {
+        self.currentChapterIndex += 1
+      }
+    }
+  }
+
+  private func previousPageOrChapter() {
+    controller.previousPage {
+      if self.currentChapterIndex > 0 {
+        self.currentChapterIndex -= 1
+      }
+    }
+  }
+
+  // MARK: - Robust Chapter Path Resolution
+
+  private func resolveChapterPaths(bookDir: URL) async -> [String] {
+    await Task.detached(priority: .userInitiated) { () -> [String] in
+      let fileManager = FileManager.default
+
+      // 1. Try spine.json
+      let spineURL = bookDir.appendingPathComponent("spine.json")
+      if let data = try? Data(contentsOf: spineURL),
+        let relativePaths = try? JSONDecoder().decode([String].self, from: data),
+        !relativePaths.isEmpty
+      {
+        let fullPaths = relativePaths.compactMap { rel -> String? in
+          let clean = (rel.components(separatedBy: "#").first ?? rel).removingPercentEncoding ?? rel
+          let url = bookDir.appendingPathComponent(clean).standardizedFileURL
+          if fileManager.fileExists(atPath: url.path) {
+            return url.path
+          }
+          // Fallback: check matching last path component
+          let filename = (clean as NSString).lastPathComponent
+          let altURL = bookDir.appendingPathComponent(filename)
+          if fileManager.fileExists(atPath: altURL.path) {
+            return altURL.path
+          }
+          return url.path
+        }
+        if !fullPaths.isEmpty {
+          return fullPaths
+        }
+      }
+
+      // 2. Fallback: Search bookDir recursively for .xhtml / .html files
+      if let enumerator = fileManager.enumerator(
+        at: bookDir,
+        includingPropertiesForKeys: [.isRegularFileKey],
+        options: [.skipsHiddenFiles]
+      ) {
+        var found: [URL] = []
+        for case let fileURL as URL in enumerator {
+          let ext = fileURL.pathExtension.lowercased()
+          let name = fileURL.lastPathComponent.lowercased()
+          if (ext == "xhtml" || ext == "html" || ext == "htm"),
+            !name.contains("toc"),
+            !name.contains("nav"),
+            !name.hasPrefix(".")
+          {
+            found.append(fileURL)
+          }
+        }
+        let sorted = found.sorted {
+          $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
+        }
+        return sorted.map { $0.path }
+      }
+
+      return []
+    }.value
+  }
+}
+
+// MARK: - Representable Container for WKWebView
 #if os(iOS)
   struct WebViewContainer: UIViewRepresentable {
     let webView: WKWebView

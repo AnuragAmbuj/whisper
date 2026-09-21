@@ -13,16 +13,37 @@ import SwiftUI
 class LibraryViewModel {
     var searchText: String = ""
     var selectedCategory: String = "All"
-    
-    // In a real app with SwiftData @Query in the view, we might filter there or here. 
-    // For MVVM purity, we can handle logic here, but SwiftData @Query is very View-centric.
-    // We will use this VM for auxiliary logic and maybe actions.
+    let categories: [String] = ["All", "EPUB", "PDF", "Comics", "Text"]
     
     func filterBooks(_ books: [Book]) -> [Book] {
-        if searchText.isEmpty {
-            return books
-        } else {
-            return books.filter { $0.title.localizedCaseInsensitiveContains(searchText) || $0.author.localizedCaseInsensitiveContains(searchText) }
+        var result = books
+        
+        if selectedCategory != "All" {
+            result = result.filter { book in
+                let fmt = book.format ?? .text
+                switch selectedCategory {
+                case "EPUB":
+                    return fmt == .epub
+                case "PDF":
+                    return fmt == .pdf
+                case "Comics":
+                    return fmt == .comic
+                case "Text":
+                    return fmt == .text
+                default:
+                    return true
+                }
+            }
         }
+        
+        let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedQuery.isEmpty {
+            result = result.filter {
+                $0.title.localizedCaseInsensitiveContains(trimmedQuery) ||
+                $0.author.localizedCaseInsensitiveContains(trimmedQuery)
+            }
+        }
+        
+        return result
     }
 }

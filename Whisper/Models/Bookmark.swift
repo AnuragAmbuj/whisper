@@ -10,18 +10,16 @@ import SwiftData
 
 @Model
 final class Bookmark {
-    var id: UUID
-    var date: Date
-    var pageOrLocation: Int // Simplified representation of location
-    var note: String?
+    var id: UUID = UUID()
+    var date: Date = Date()
+    var pageOrLocation: Int = 0
+    var note: String? = nil
     
-    // Relationship back to Book (optional or implicit)
-    // For this simple app, we might just store bookmarks in the Book model as an array if SwiftData supports it easily,
-    // or keep them separate. Let's start with embedded logic or separate if needed.
-    // Ideally: var book: Book?
+    // Relationship back to Book
+    var book: Book? = nil
     
-    init(date: Date = Date(), pageOrLocation: Int, note: String? = nil) {
-        self.id = UUID()
+    init(id: UUID = UUID(), date: Date = Date(), pageOrLocation: Int = 0, note: String? = nil) {
+        self.id = id
         self.date = date
         self.pageOrLocation = pageOrLocation
         self.note = note

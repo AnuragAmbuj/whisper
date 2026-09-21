@@ -38,9 +38,10 @@ final class WebKitWarmer {
 
     if allowFileAccess {
       config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
+      config.setValue(true, forKey: "allowUniversalAccessFromFileURLs")
     }
 
-    config.suppressesIncrementalRendering = true
+    config.suppressesIncrementalRendering = false
 
     let webView = WKWebView(frame: .zero, configuration: config)
 
@@ -51,8 +52,12 @@ final class WebKitWarmer {
       webView.scrollView.showsHorizontalScrollIndicator = false
       webView.scrollView.showsVerticalScrollIndicator = false
       webView.scrollView.contentInsetAdjustmentBehavior = .never
+      webView.scrollView.minimumZoomScale = 1.0
+      webView.scrollView.maximumZoomScale = 4.0
+      webView.scrollView.bounces = true
     #else
       webView.setValue(false, forKey: "drawsBackground")
+      webView.allowsMagnification = true
     #endif
 
     return webView

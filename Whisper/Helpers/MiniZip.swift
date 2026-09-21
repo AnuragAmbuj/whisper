@@ -7,6 +7,7 @@
 
 import Foundation
 import Compression
+import zlib
 
 enum MiniZipError: Error, LocalizedError {
     case fileNotFound
@@ -88,9 +89,11 @@ class MiniZip {
             let extraFieldLength = Int(readUInt16(from: headerData, at: 30))
             let fileCommentLength = Int(readUInt16(from: headerData, at: 32))
             
-            if let fileNameData = try? fileHandle.read(upToCount: fileNameLength),
-               let fileName = String(data: fileNameData, encoding: .utf8) {
-                files.append(fileName)
+            if let fileNameData = try? fileHandle.read(upToCount: fileNameLength) {
+                let name = decodeFileName(data: fileNameData)
+                if !name.isEmpty {
+                    files.append(name)
+                }
             }
             
             currentOffset += UInt64(46 + fileNameLength + extraFieldLength + fileCommentLength)
@@ -133,6 +136,19 @@ class MiniZip {
         return nil
     }
     
+    private func decodeFileName(data: Data) -> String {
+        if let utf8 = String(data: data, encoding: .utf8) {
+            return utf8
+        }
+        if let latin1 = String(data: data, encoding: .isoLatin1) {
+            return latin1
+        }
+        if let cp1252 = String(data: data, encoding: .windowsCP1252) {
+            return cp1252
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+    
     private func unzipStreaming(fileHandle: FileHandle, fileSize: UInt64, destinationURL: URL) throws {
         guard let eocdInfo = findEOCDStreaming(fileHandle: fileHandle, fileSize: fileSize) else {
             throw MiniZipError.invalidZipFile
@@ -156,8 +172,13 @@ class MiniZip {
             let fileCommentLength = Int(readUInt16(from: headerData, at: 32))
             let localHeaderOffset = UInt64(readUInt32(from: headerData, at: 42))
             
-            guard let fileNameData = try? fileHandle.read(upToCount: fileNameLength),
-                  let fileName = String(data: fileNameData, encoding: .utf8) else {
+            guard let fileNameData = try? fileHandle.read(upToCount: fileNameLength) else {
+                currentOffset += UInt64(46 + fileNameLength + extraFieldLength + fileCommentLength)
+                continue
+            }
+            
+            let fileName = decodeFileName(data: fileNameData)
+            guard !fileName.isEmpty else {
                 currentOffset += UInt64(46 + fileNameLength + extraFieldLength + fileCommentLength)
                 continue
             }
@@ -187,14 +208,17 @@ class MiniZip {
         destinationURL: URL,
         fileManager: FileManager
     ) throws {
-        if fileName.hasSuffix("/") {
-            let dirURL = destinationURL.appendingPathComponent(fileName)
+        // Normalize path separators (handle Windows backslashes)
+        let normalizedPath = fileName.replacingOccurrences(of: "\\", with: "/")
+        
+        if normalizedPath.hasSuffix("/") {
+            let dirURL = destinationURL.appendingPathComponent(normalizedPath, isDirectory: true)
             try? fileManager.createDirectory(at: dirURL, withIntermediateDirectories: true)
             return
         }
         
-        let lastComponent = (fileName as NSString).lastPathComponent
-        if lastComponent.hasPrefix(".") || lastComponent == "__MACOSX" || fileName.contains("__MACOSX/") {
+        let lastComponent = (normalizedPath as NSString).lastPathComponent
+        if lastComponent.hasPrefix(".") || lastComponent == "__MACOSX" || normalizedPath.contains("__MACOSX/") {
             return
         }
         
@@ -207,6 +231,7 @@ class MiniZip {
         let dataOffset = localHeaderOffset + 30 + UInt64(localFileNameLength) + UInt64(localExtraFieldLength)
         try fileHandle.seek(toOffset: dataOffset)
         
+        guard compressedSize > 0 else { return }
         guard let compressedData = try? fileHandle.read(upToCount: compressedSize) else { return }
         
         let fileData: Data
@@ -214,16 +239,16 @@ class MiniZip {
             fileData = compressedData
         } else if compressionMethod == 8 {
             guard let decompressed = decompressDeflate(compressedData, expectedSize: uncompressedSize) else {
-                print("MiniZip Warning: Failed to decompress \(fileName)")
+                print("MiniZip Warning: Failed to decompress \(normalizedPath)")
                 return
             }
             fileData = decompressed
         } else {
-            print("MiniZip Warning: Unsupported compression method \(compressionMethod) for \(fileName)")
+            print("MiniZip Warning: Unsupported compression method \(compressionMethod) for \(normalizedPath)")
             return
         }
         
-        let fileURL = destinationURL.appendingPathComponent(fileName)
+        let fileURL = destinationURL.appendingPathComponent(normalizedPath)
         try fileManager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try fileData.write(to: fileURL)
     }
@@ -231,6 +256,59 @@ class MiniZip {
     private func decompressDeflate(_ compressedData: Data, expectedSize: Int) -> Data? {
         guard expectedSize > 0 else { return Data() }
         
+        // 1. Try raw DEFLATE using zlib inflateInit2 (ZIP standard RFC 1951, windowBits = -15)
+        var stream = z_stream()
+        var status = inflateInit2_(&stream, -MAX_WBITS, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size))
+        if status == Z_OK {
+            var decompressedData = Data(count: expectedSize)
+            let result = decompressedData.withUnsafeMutableBytes { (destBuffer: UnsafeMutableRawBufferPointer) -> Int in
+                compressedData.withUnsafeBytes { (srcBuffer: UnsafeRawBufferPointer) -> Int in
+                    stream.next_in = UnsafeMutablePointer<Bytef>(mutating: srcBuffer.bindMemory(to: Bytef.self).baseAddress)
+                    stream.avail_in = uInt(compressedData.count)
+                    stream.next_out = destBuffer.bindMemory(to: Bytef.self).baseAddress
+                    stream.avail_out = uInt(expectedSize)
+                    
+                    let ret = inflate(&stream, Z_FINISH)
+                    if ret == Z_STREAM_END || ret == Z_OK {
+                        return expectedSize - Int(stream.avail_out)
+                    }
+                    return 0
+                }
+            }
+            inflateEnd(&stream)
+            if result > 0 {
+                decompressedData.count = result
+                return decompressedData
+            }
+        }
+        
+        // 2. Try with zlib header (windowBits = 15) in case archive used zlib stream
+        var streamZlib = z_stream()
+        status = inflateInit2_(&streamZlib, MAX_WBITS, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size))
+        if status == Z_OK {
+            var decompressedData = Data(count: expectedSize)
+            let result = decompressedData.withUnsafeMutableBytes { (destBuffer: UnsafeMutableRawBufferPointer) -> Int in
+                compressedData.withUnsafeBytes { (srcBuffer: UnsafeRawBufferPointer) -> Int in
+                    streamZlib.next_in = UnsafeMutablePointer<Bytef>(mutating: srcBuffer.bindMemory(to: Bytef.self).baseAddress)
+                    streamZlib.avail_in = uInt(compressedData.count)
+                    streamZlib.next_out = destBuffer.bindMemory(to: Bytef.self).baseAddress
+                    streamZlib.avail_out = uInt(expectedSize)
+                    
+                    let ret = inflate(&streamZlib, Z_FINISH)
+                    if ret == Z_STREAM_END || ret == Z_OK {
+                        return expectedSize - Int(streamZlib.avail_out)
+                    }
+                    return 0
+                }
+            }
+            inflateEnd(&streamZlib)
+            if result > 0 {
+                decompressedData.count = result
+                return decompressedData
+            }
+        }
+        
+        // 3. Fallback to Apple Compression framework
         let destinationBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: expectedSize)
         defer { destinationBuffer.deallocate() }
         
@@ -248,14 +326,15 @@ class MiniZip {
             )
         }
         
-        guard decompressedSize > 0 else {
-            if let decompressed = try? (compressedData as NSData).decompressed(using: .zlib) as Data {
-                return decompressed
-            }
-            return nil
+        if decompressedSize > 0 {
+            return Data(bytes: destinationBuffer, count: decompressedSize)
         }
         
-        return Data(bytes: destinationBuffer, count: decompressedSize)
+        if let decompressed = try? (compressedData as NSData).decompressed(using: .zlib) as Data {
+            return decompressed
+        }
+        
+        return nil
     }
     
     private func readUInt16(from data: Data, at offset: Int) -> UInt16 {

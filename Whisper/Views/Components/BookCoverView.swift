@@ -9,54 +9,122 @@ import SwiftUI
 
 struct BookCoverView: View {
     let book: Book
+    var showMetadata: Bool = true
+    
+    private var coverBackground: Color {
+        DS.Colors.cardBackground
+    }
     
     var body: some View {
-        VStack(spacing: 0) {
-            ZStack(alignment: .bottom) {
-                CachedAsyncImage(imageName: book.coverImageName) {
-                    Rectangle()
-                        .fill(
-                            LinearGradient(
-                                colors: [.cyan.opacity(0.8), .blue.opacity(0.8)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .overlay {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        }
-                }
-                .aspectRatio(2/3, contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md))
-                
-                VStack(alignment: .leading, spacing: DS.Spacing.xxs) {
+        VStack(alignment: .leading, spacing: DS.Spacing.xs) {
+            coverImage
+            
+            if showMetadata {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(book.title)
-                        .font(.headline)
-                        .fontWeight(.bold)
-                        .foregroundColor(.white)
-                        .multilineTextAlignment(.leading)
-                        .lineLimit(2)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
                     
                     Text(book.author)
                         .font(.caption)
-                        .foregroundColor(.white.opacity(DS.Opacity.secondary))
+                        .foregroundColor(.secondary)
                         .lineLimit(1)
+                    
+                    if book.progress > 0 {
+                        ProgressView(value: book.progress)
+                            .tint(DS.Colors.accent)
+                            .scaleEffect(x: 1, y: 0.5, anchor: .center)
+                            .padding(.top, 2)
+                    }
                 }
-                .padding(DS.Spacing.md)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.ultraThinMaterial)
-                .clipShape(
-                    RoundedCornerShape(radius: DS.Radius.md, corners: [.bottomLeft, .bottomRight])
-                )
+                .padding(.horizontal, 2)
             }
-            .overlay(
-                RoundedRectangle(cornerRadius: DS.Radius.md)
-                    .stroke(.white.opacity(DS.Opacity.stroke), lineWidth: 1)
-            )
-            .shadow(radius: DS.Shadow.sm.radius)
         }
         .frame(maxWidth: DS.Layout.gridItemMax)
+    }
+    
+    private var coverImage: some View {
+        ZStack(alignment: .topTrailing) {
+            CachedAsyncImage(
+                imageName: book.coverImageName,
+                placeholder: {
+                    coverPlaceholder
+                },
+                fallback: {
+                    generatedCover
+                }
+            )
+            .aspectRatio(2/3, contentMode: .fill)
+            .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                    .stroke(DS.Colors.border, lineWidth: 1)
+            )
+            
+            // Subtle format badge at top-right
+            Text((book.format ?? .text).rawValue.uppercased())
+                .font(.system(size: 9, weight: .bold))
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(DS.Colors.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .stroke(DS.Colors.border, lineWidth: 0.5)
+                )
+                .padding(8)
+        }
+    }
+    
+    private var coverPlaceholder: some View {
+        Rectangle()
+            .fill(coverBackground)
+            .overlay {
+                ProgressView()
+                    .tint(.primary)
+            }
+    }
+    
+    private var generatedCover: some View {
+        ZStack {
+            Rectangle()
+                .fill(coverBackground)
+            
+            VStack(spacing: DS.Spacing.sm) {
+                Image(systemName: iconForFormat)
+                    .font(.system(size: 30))
+                    .foregroundColor(.primary)
+                
+                Text(book.title)
+                    .font(.system(size: 13, weight: .bold, design: .serif))
+                    .foregroundColor(.primary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                    .padding(.horizontal, 8)
+                
+                if !book.author.isEmpty {
+                    Text(book.author)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(1)
+                        .padding(.horizontal, 8)
+                }
+            }
+            .padding(.all, 12)
+        }
+    }
+    
+    private var iconForFormat: String {
+        switch book.format ?? .text {
+        case .epub: return "book.closed.fill"
+        case .pdf: return "doc.text.fill"
+        case .comic: return "photo.stack.fill"
+        case .text: return "text.quote"
+        }
     }
 }
 

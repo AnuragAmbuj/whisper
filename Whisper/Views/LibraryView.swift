@@ -13,6 +13,9 @@ struct LibraryView: View {
   @State private var viewModel = LibraryViewModel()
   @State private var isImporting = false
   @State private var isProcessingImport = false
+  @State private var showImportError = false
+  @State private var importErrorMessage: String?
+  @State private var hoveredCategory: String? = nil
   @Query var books: [Book]
   @Environment(\.modelContext) private var modelContext
 
@@ -26,40 +29,32 @@ struct LibraryView: View {
     viewModel.filterBooks(books)
   }
 
-  init() {
-    #if os(iOS)
-      if #available(iOS 15.0, *) {
-        let appearance = UINavigationBarAppearance()
-        appearance.configureWithTransparentBackground()
-        appearance.titleTextAttributes = [.foregroundColor: UIColor.white]
-        appearance.largeTitleTextAttributes = [.foregroundColor: UIColor.white]
-        UINavigationBar.appearance().standardAppearance = appearance
-        UINavigationBar.appearance().scrollEdgeAppearance = appearance
-      }
-    #endif
-  }
-
   var body: some View {
     NavigationStack {
       ZStack {
-        LiquidBackground()
+        // Native Apple system background
+        #if os(iOS)
+        systemBackground
+          .ignoresSafeArea()
+        #else
+        systemBackground
+        #endif
 
         ScrollView {
-          LazyVGrid(columns: columns, spacing: DS.Spacing.xxl) {
-            ForEach(filteredBooks) { book in
-              NavigationLink(destination: BookDetailView(book: book)) {
-                BookCoverView(book: book)
-              }
-              .contextMenu {
-                Button(role: .destructive) {
-                  deleteBook(book)
-                } label: {
-                  Label("Delete", systemImage: "trash")
-                }
-              }
-            }
+          VStack(spacing: DS.Spacing.lg) {
+            categoryChipsView
+              #if os(macOS)
+              .padding(.top, DS.Spacing.md)
+              #else
+              .padding(.top, DS.Spacing.xs)
+              #endif
+
+            booksGridView
+              .padding(.horizontal)
+              .padding(.bottom, DS.Spacing.xxl)
           }
-          .padding()
+          .frame(maxWidth: DS.Layout.maxSplitWidth)
+          .frame(maxWidth: .infinity)
         }
 
         if isProcessingImport {
@@ -73,15 +68,17 @@ struct LibraryView: View {
       }
       .toolbar {
         ToolbarItem(placement: .primaryAction) {
-          HStack {
-            Button(action: loadMockData) {
+          HStack(spacing: DS.Spacing.sm) {
+            Menu {
+              Button(action: resetToSampleLibrary) {
+                Label("Reload Sample Library", systemImage: "arrow.counterclockwise")
+              }
+            } label: {
               Image(systemName: "arrow.clockwise")
-                .iconButtonStyle()
             }
 
             Button(action: { isImporting = true }) {
               Image(systemName: "plus")
-                .iconButtonStyle()
             }
             .disabled(isProcessingImport)
           }
@@ -94,62 +91,116 @@ struct LibraryView: View {
       ) { result in
         handleImport(result: result)
       }
+      .alert("Import Notice", isPresented: $showImportError) {
+        Button("OK", role: .cancel) {}
+      } message: {
+        Text(importErrorMessage ?? "An error occurred during import.")
+      }
       .overlay {
         if books.isEmpty && !isProcessingImport {
           emptyStateView
         }
       }
     }
-    .preferredColorScheme(.dark)
+  }
+
+  private var systemBackground: Color {
+    #if os(iOS)
+    return Color(uiColor: .systemBackground)
+    #elseif os(macOS)
+    return Color(nsColor: .windowBackgroundColor)
+    #else
+    return Color.black
+    #endif
+  }
+
+  private var categoryChipsView: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: DS.Spacing.sm) {
+        ForEach(viewModel.categories, id: \.self) { category in
+          let isSelected = viewModel.selectedCategory == category
+          let isHovered = hoveredCategory == category && !isSelected
+          Button(action: {
+            withAnimation(.easeInOut(duration: DS.Animation.fast)) {
+              viewModel.selectedCategory = category
+            }
+          }) {
+            Text(category)
+              .font(.subheadline.weight(isSelected ? .semibold : .regular))
+              .foregroundColor(
+                isSelected
+                  ? DS.Colors.onSelection
+                  : (isHovered ? Color.primary : Color.secondary)
+              )
+              .padding(.horizontal, DS.Spacing.md)
+              .padding(.vertical, DS.Spacing.xs)
+              .background(
+                Capsule()
+                  .fill(
+                    isSelected
+                      ? DS.Colors.selection
+                      : (isHovered ? DS.Colors.hover : DS.Colors.unselectedFill)
+                  )
+              )
+          }
+          .buttonStyle(.plain)
+          .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.12)) {
+              hoveredCategory = hovering ? category : nil
+            }
+          }
+        }
+      }
+      .padding(.horizontal)
+    }
+  }
+
+  private var booksGridView: some View {
+    LazyVGrid(columns: columns, spacing: DS.Spacing.xxl) {
+      ForEach(filteredBooks) { book in
+        NavigationLink(destination: BookDetailView(book: book)) {
+          BookCoverView(book: book)
+        }
+        .contextMenu {
+          Button(role: .destructive) {
+            deleteBook(book)
+          } label: {
+            Label("Delete", systemImage: "trash")
+          }
+        }
+      }
+    }
   }
 
   private var importingOverlay: some View {
     ZStack {
-      Color.black.opacity(0.6)
+      Color.black.opacity(0.3)
         .ignoresSafeArea()
 
-      VStack(spacing: 20) {
+      VStack(spacing: 16) {
         ProgressView()
-          .progressViewStyle(CircularProgressViewStyle(tint: .white))
-          .scaleEffect(1.5)
+          .controlSize(.large)
+          .tint(.primary)
 
         Text("Importing...")
           .font(.headline)
-          .foregroundColor(.white)
+          .foregroundColor(.primary)
       }
-      .padding(40)
-      .background(.ultraThinMaterial)
-      .cornerRadius(20)
+      .padding(32)
+      .background(DS.Colors.cardBackground)
+      .clipShape(RoundedRectangle(cornerRadius: DS.Radius.xl, style: .continuous))
+      .overlay(
+        RoundedRectangle(cornerRadius: DS.Radius.xl, style: .continuous)
+          .stroke(DS.Colors.border, lineWidth: 1)
+      )
     }
   }
 
   private var emptyStateView: some View {
-    Group {
-      if #available(iOS 17.0, macOS 14.0, *) {
-        ContentUnavailableView {
-          Label("Library Empty", systemImage: "books.vertical")
-            .foregroundColor(.white)
-        } description: {
-          Text("Tap the refresh button to load sample books.")
-            .foregroundColor(.white.opacity(0.8))
-        }
-      } else {
-        VStack(spacing: DS.Spacing.lg) {
-          Image(systemName: "books.vertical")
-            .font(.system(size: 60))
-            .foregroundColor(.white.opacity(DS.Opacity.tertiary))
-          Text("Library Empty")
-            .font(.title2)
-            .fontWeight(.semibold)
-            .foregroundColor(.white)
-          Text("Tap the refresh button to load sample books.")
-            .font(.body)
-            .foregroundColor(.white.opacity(DS.Opacity.secondary))
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, DS.Spacing.xxxl)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-      }
+    ContentUnavailableView {
+      Label("Library Empty", systemImage: "books.vertical")
+    } description: {
+      Text("Tap the refresh button to load sample books or the plus button to import your own.")
     }
   }
 
@@ -161,24 +212,29 @@ struct LibraryView: View {
       isProcessingImport = true
 
       Task {
-        if selectedURL.startAccessingSecurityScopedResource() {
-          defer { selectedURL.stopAccessingSecurityScopedResource() }
-
-          if let newBook = await ImportService.shared.importFile(at: selectedURL) {
-            await MainActor.run {
-              modelContext.insert(newBook)
-              try? modelContext.save()
-            }
-          }
+        let accessing = selectedURL.startAccessingSecurityScopedResource()
+        defer {
+          if accessing { selectedURL.stopAccessingSecurityScopedResource() }
         }
 
-        await MainActor.run {
-          isProcessingImport = false
+        if let newBook = await ImportService.shared.importFile(at: selectedURL) {
+          await MainActor.run {
+            modelContext.insert(newBook)
+            try? modelContext.save()
+            isProcessingImport = false
+          }
+        } else {
+          await MainActor.run {
+            isProcessingImport = false
+            importErrorMessage = "Could not import the selected file. Please ensure it is a valid EPUB, PDF, CBZ/CBR comic, or TXT file."
+            showImportError = true
+          }
         }
       }
 
     case .failure(let error):
-      print("Import failed: \(error.localizedDescription)")
+      importErrorMessage = error.localizedDescription
+      showImportError = true
     }
   }
 
@@ -186,26 +242,16 @@ struct LibraryView: View {
     BookService.shared.checkForSeeding(context: modelContext)
   }
 
+  func resetToSampleLibrary() {
+    for book in books {
+      deleteBook(book)
+    }
+    BookService.shared.seedBooks(context: modelContext)
+  }
+
   func deleteBook(_ book: Book) {
-    let bookDirToDelete = book.bookDir
-    let coverName = book.coverImageName
-    
+    book.cleanupFiles()
     modelContext.delete(book)
     try? modelContext.save()
-    
-    let fileManager = FileManager.default
-    if let dir = bookDirToDelete {
-      try? fileManager.removeItem(at: dir)
-    }
-    if !coverName.isEmpty,
-       let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first {
-      let coverURL = docs.appendingPathComponent(coverName)
-      try? fileManager.removeItem(at: coverURL)
-    }
   }
-}
-
-#Preview {
-  LibraryView()
-    .modelContainer(for: Book.self, inMemory: true)
 }

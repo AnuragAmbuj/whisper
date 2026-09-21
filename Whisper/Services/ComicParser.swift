@@ -42,7 +42,7 @@ class ComicParser {
     static let shared = ComicParser()
     
     /// Supported image extensions
-    private let imageExtensions = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif"]
+    private let imageExtensions = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif", "heic", "heif", "avif"]
     
     private init() {}
     
@@ -67,8 +67,8 @@ class ComicParser {
         }
         
         let extractDir = documentsDir
-            .appendingPathComponent("Books")
-            .appendingPathComponent(bookID.uuidString)
+            .appendingPathComponent("Books", isDirectory: true)
+            .appendingPathComponent(bookID.uuidString, isDirectory: true)
         
         do {
             try fileManager.createDirectory(at: extractDir, withIntermediateDirectories: true)
@@ -77,8 +77,7 @@ class ComicParser {
             if ext == "cbz" || ext == "zip" {
                 try extractCBZ(from: sourceURL, to: extractDir)
             } else if ext == "cbr" || ext == "rar" {
-                // CBR uses RAR format - not natively supported
-                // For now, try treating it as a ZIP (some CBR files are actually ZIP)
+                // CBR uses RAR format - try ZIP first in case it was a renamed CBZ
                 do {
                     try extractCBZ(from: sourceURL, to: extractDir)
                 } catch {
@@ -99,9 +98,16 @@ class ComicParser {
             
             print("ComicParser: Found \(imageURLs.count) pages")
             
-            // Save page list to JSON
+            // Save page list to JSON using standardized relative paths
+            let baseStandardPath = extractDir.standardizedFileURL.path
             let relativePaths = imageURLs.map { url -> String in
-                url.path.replacingOccurrences(of: extractDir.path + "/", with: "")
+                let standardPath = url.standardizedFileURL.path
+                if standardPath.hasPrefix(baseStandardPath) {
+                    var rel = String(standardPath.dropFirst(baseStandardPath.count))
+                    if rel.hasPrefix("/") { rel.removeFirst() }
+                    return rel
+                }
+                return url.lastPathComponent
             }
             
             let pagesURL = extractDir.appendingPathComponent("pages.json")
@@ -143,14 +149,31 @@ class ComicParser {
     /// - Parameter bookDir: URL of the extracted comic directory
     /// - Returns: Array of page image URLs sorted by name
     func getPages(from bookDir: URL) -> [URL] {
-        // Try to load from pages.json first
+        let fileManager = FileManager.default
+        
+        // 1. Try to load from pages.json first
         let pagesURL = bookDir.appendingPathComponent("pages.json")
         if let data = try? Data(contentsOf: pagesURL),
            let paths = try? JSONDecoder().decode([String].self, from: data) {
-            return paths.map { bookDir.appendingPathComponent($0) }
+            let urls = paths.map { relPath -> URL in
+                if relPath.hasPrefix("/") {
+                    let candidate = URL(fileURLWithPath: relPath)
+                    if fileManager.fileExists(atPath: candidate.path) {
+                        return candidate
+                    }
+                    let fileName = (relPath as NSString).lastPathComponent
+                    return bookDir.appendingPathComponent(fileName)
+                }
+                return bookDir.appendingPathComponent(relPath)
+            }
+            
+            let validURLs = urls.filter { fileManager.fileExists(atPath: $0.path) }
+            if !validURLs.isEmpty {
+                return validURLs
+            }
         }
         
-        // Fallback: scan directory
+        // 2. Fallback: scan directory directly
         return (try? findImages(in: bookDir)) ?? []
     }
     
@@ -199,25 +222,21 @@ class ComicParser {
             // Resize to cover size
             let targetSize = CGSize(width: 300, height: 450)
             let renderer = UIGraphicsImageRenderer(size: targetSize)
-            let resized = renderer.image { _ in
+            let coverData = renderer.jpegData(withCompressionQuality: 0.8) { _ in
                 image.draw(in: CGRect(origin: .zero, size: targetSize))
             }
-            if let data = resized.jpegData(compressionQuality: 0.8) {
-                try? data.write(to: coverURL)
-                return coverName
-            }
+            try? coverData.write(to: coverURL)
+            return coverName
         }
         #elseif canImport(AppKit)
         if let image = NSImage(contentsOfFile: imageURL.path) {
             let targetSize = NSSize(width: 300, height: 450)
-            let resized = NSImage(size: targetSize)
-            resized.lockFocus()
-            image.draw(in: NSRect(origin: .zero, size: targetSize),
-                      from: NSRect(origin: .zero, size: image.size),
-                      operation: .copy, fraction: 1.0)
-            resized.unlockFocus()
+            let resizedImage = NSImage(size: targetSize)
+            resizedImage.lockFocus()
+            image.draw(in: NSRect(origin: .zero, size: targetSize))
+            resizedImage.unlockFocus()
             
-            if let tiffData = resized.tiffRepresentation,
+            if let tiffData = resizedImage.tiffRepresentation,
                let bitmap = NSBitmapImageRep(data: tiffData),
                let jpegData = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.8]) {
                 try? jpegData.write(to: coverURL)
@@ -226,8 +245,6 @@ class ComicParser {
         }
         #endif
         
-        // Fallback: just copy the original image
-        try? FileManager.default.copyItem(at: imageURL, to: coverURL)
-        return coverName
+        return ""
     }
 }

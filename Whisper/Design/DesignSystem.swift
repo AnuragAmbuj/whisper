@@ -8,9 +8,77 @@
 import SwiftUI
 
 // MARK: - Design System
-/// Centralized design tokens for consistent UI across the app
+/// Centralized design tokens for consistent, minimal, and flat UI across the app
 
 enum DS {
+    
+    // MARK: - Colors (Minimal, High-Contrast, Apple First-Party Style)
+    enum Colors {
+        /// Unified app primary accent color: High-contrast primary matching Apple Books
+        static let accent = Color.primary
+        
+        /// Subtle secondary tint for muted labels and icons
+        static let secondary = Color.secondary
+        
+        /// Minimal, flat 1px hairline border
+        static let border = Color.primary.opacity(0.08)
+        
+        /// Subtle divider
+        static let divider = Color.primary.opacity(0.06)
+        
+        /// High-contrast active selection background (Apple Books style: solid black in light mode, solid white in dark mode)
+        static let selection = Color.primary
+        
+        /// Foreground text / icons on top of active selection
+        static var onSelection: Color {
+            #if os(iOS)
+            return Color(uiColor: .systemBackground)
+            #elseif os(macOS)
+            return Color(nsColor: .windowBackgroundColor)
+            #else
+            return Color.black
+            #endif
+        }
+        
+        /// Subtle neutral hover background for buttons and navigation items
+        static let hover = Color.primary.opacity(0.08)
+        
+        /// Neutral unselected chip / pill background
+        static let unselectedFill = Color.primary.opacity(0.06)
+        
+        /// Consistent system surface / card background
+        static var cardBackground: Color {
+            #if os(iOS)
+            return Color(uiColor: .secondarySystemGroupedBackground)
+            #elseif os(macOS)
+            return Color(nsColor: .controlBackgroundColor)
+            #else
+            return Color.gray.opacity(0.12)
+            #endif
+        }
+        
+        /// Consistent page / canvas background
+        static var background: Color {
+            #if os(iOS)
+            return Color(uiColor: .systemBackground)
+            #elseif os(macOS)
+            return Color(nsColor: .windowBackgroundColor)
+            #else
+            return Color.black
+            #endif
+        }
+        
+        /// Consistent grouped canvas background
+        static var groupedBackground: Color {
+            #if os(iOS)
+            return Color(uiColor: .systemGroupedBackground)
+            #elseif os(macOS)
+            return Color(nsColor: .windowBackgroundColor)
+            #else
+            return Color.black
+            #endif
+        }
+    }
     
     // MARK: - Spacing
     /// Standardized spacing scale (4pt base)
@@ -45,8 +113,7 @@ enum DS {
         static let subtleStroke: Double = 0.1
     }
     
-    // MARK: - Shadows
-    /// Standardized shadow configurations
+    // MARK: - Shadows (Subtle, Flat, Non-Glowing)
     enum Shadow {
         struct Config {
             let color: Color
@@ -55,10 +122,11 @@ enum DS {
             let y: CGFloat
         }
         
-        static let sm = Config(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
-        static let md = Config(color: .black.opacity(0.25), radius: 12, x: 0, y: 6)
-        static let lg = Config(color: .black.opacity(0.25), radius: 14, x: 0, y: 10)
-        static let glass = Config(color: .black.opacity(0.15), radius: 10, x: 0, y: 4)
+        static let sm = Config(color: .black.opacity(0.06), radius: 3, x: 0, y: 1)
+        static let md = Config(color: .black.opacity(0.08), radius: 6, x: 0, y: 2)
+        static let lg = Config(color: .black.opacity(0.10), radius: 10, x: 0, y: 4)
+        static let glass = Config(color: .black.opacity(0.04), radius: 4, x: 0, y: 1)
+        static let none = Config(color: .clear, radius: 0, x: 0, y: 0)
     }
     
     // MARK: - Animation
@@ -87,13 +155,6 @@ enum DS {
         static let gridItemMax: CGFloat = 180
         static let gridSpacing: CGFloat = 20
     }
-    
-    // MARK: - Background Opacity
-    /// Opacity for LiquidBackground in different contexts
-    enum BackgroundOpacity {
-        static let full: Double = 1.0
-        static let overlay: Double = 0.3
-    }
 }
 
 // MARK: - Shadow View Extension
@@ -103,17 +164,16 @@ extension View {
     }
 }
 
-// MARK: - Primary Button Style
+// MARK: - Primary Button Style (Minimal, Flat, Clean, High Contrast)
 struct PrimaryButtonStyle: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .font(.headline)
-            .foregroundColor(.black)
+            .font(.headline.weight(.semibold))
+            .foregroundColor(DS.Colors.onSelection)
             .frame(maxWidth: .infinity)
             .padding()
-            .background(Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md))
-            .shadow(DS.Shadow.sm)
+            .background(Color.primary)
+            .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
     }
 }
 
@@ -129,9 +189,15 @@ struct IconButtonStyle: ViewModifier {
     
     func body(content: Content) -> some View {
         content
-            .foregroundColor(.white)
+            .foregroundColor(.primary)
             .padding(padding)
-            .background(.ultraThinMaterial)
+            #if os(iOS)
+            .background(Color(uiColor: .secondarySystemFill))
+            #elseif os(macOS)
+            .background(Color.secondary.opacity(0.15))
+            #else
+            .background(.regularMaterial)
+            #endif
             .clipShape(Circle())
     }
 }
@@ -154,11 +220,10 @@ struct BookCoverStyle: ViewModifier {
     func body(content: Content) -> some View {
         content
             .aspectRatio(2/3, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: size == .small ? DS.Radius.md : DS.Radius.lg))
-            .shadow(size == .small ? DS.Shadow.sm : DS.Shadow.lg)
+            .clipShape(RoundedRectangle(cornerRadius: size == .small ? DS.Radius.md : DS.Radius.lg, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: size == .small ? DS.Radius.md : DS.Radius.lg)
-                    .stroke(.white.opacity(DS.Opacity.stroke), lineWidth: 1)
+                RoundedRectangle(cornerRadius: size == .small ? DS.Radius.md : DS.Radius.lg, style: .continuous)
+                    .stroke(DS.Colors.border, lineWidth: 1)
             )
     }
 }
@@ -173,9 +238,13 @@ extension View {
 struct SynopsisContainerStyle: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .padding(DS.Spacing.xxl)
-            .background(.ultraThinMaterial)
-            .cornerRadius(DS.Radius.lg)
+            .padding(DS.Spacing.lg)
+            .background(DS.Colors.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
+                    .stroke(DS.Colors.border, lineWidth: 1)
+            )
     }
 }
 
@@ -192,6 +261,10 @@ struct ChipStyle: ViewModifier {
             .padding(DS.Spacing.xs)
             .background(.ultraThinMaterial)
             .cornerRadius(DS.Radius.sm)
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.Radius.sm)
+                    .stroke(DS.Colors.border, lineWidth: 0.5)
+            )
     }
 }
 
