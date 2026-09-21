@@ -9,6 +9,9 @@ import Foundation
 import CloudKit
 import Combine
 import SwiftData
+#if os(macOS)
+import Security
+#endif
 
 @MainActor
 final class CloudSyncService: ObservableObject {
@@ -65,25 +68,48 @@ final class CloudSyncService: ObservableObject {
     @Published var iCloudDriveURL: URL? = nil
     @Published var cloudBookFiles: [URL] = []
     
-    private var container: CKContainer? {
+    /// Verifies whether the process possesses active CloudKit entitlements before touching CKContainer
+    static var isCloudKitEntitled: Bool {
+        #if os(macOS)
+        guard let task = SecTaskCreateFromSelf(nil) else { return false }
+        guard let value = SecTaskCopyValueForEntitlement(task, "com.apple.developer.icloud-services" as CFString, nil) else {
+            return false
+        }
+        if let array = value as? [String] {
+            return array.contains("CloudKit") || array.contains("CloudKit-Anonymous")
+        }
+        return false
+        #elseif targetEnvironment(simulator)
+        return FileManager.default.ubiquityIdentityToken != nil
+        #else
+        return FileManager.default.ubiquityIdentityToken != nil
+        #endif
+    }
+    
+    private lazy var container: CKContainer? = {
         guard NSClassFromString("XCTestCase") == nil,
               ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else {
             return nil
         }
+        guard Self.isCloudKitEntitled else {
+            return nil
+        }
         return CKContainer(identifier: Self.containerIdentifier)
-    }
+    }()
     
     private init() {
-        resolveUbiquityContainer()
-        
-        // Listen for iCloud account changes
-        NotificationCenter.default.addObserver(
-            forName: .CKAccountChanged,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                await self?.checkAccountStatus()
+        if Self.isCloudKitEntitled {
+            resolveUbiquityContainer()
+            
+            // Listen for iCloud account changes
+            NotificationCenter.default.addObserver(
+                forName: .CKAccountChanged,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    await self?.checkAccountStatus()
+                }
             }
         }
         
@@ -95,7 +121,7 @@ final class CloudSyncService: ObservableObject {
     /// Queries the current iCloud account status
     func checkAccountStatus() async {
         guard let container = container else {
-            // In unit test or non-entitled host runner, default safely to available
+            // In unit test, simulator, or non-entitled development environment, default safely to available
             self.status = .available
             if self.lastSyncDate == nil {
                 self.lastSyncDate = Date()
@@ -128,6 +154,7 @@ final class CloudSyncService: ObservableObject {
     /// Resolves the ubiquity container Documents path for file synchronization
     func resolveUbiquityContainer() {
         guard NSClassFromString("XCTestCase") == nil else { return }
+        guard Self.isCloudKitEntitled else { return }
         
         DispatchQueue.global(qos: .utility).async {
             if let ubiquityURL = FileManager.default.url(forUbiquityContainerIdentifier: Self.containerIdentifier) {

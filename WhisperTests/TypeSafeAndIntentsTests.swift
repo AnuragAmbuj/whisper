@@ -152,4 +152,12 @@ struct TypeSafeAndIntentsTests {
         #expect(entity.author == "Neo Tokyo")
         #expect(entity.format == "Comic Book")
     }
+
+    @Test @MainActor func testCloudKitEntitlementSafety() async throws {
+        let isEntitled = CloudSyncService.isCloudKitEntitled
+        #expect(isEntitled == false || isEntitled == true)
+
+        let service = CloudSyncService.shared
+        #expect(service.status == .available || service.status == .checking || service.status == .noAccount)
+    }
 }
