@@ -165,6 +165,17 @@ struct ContentView: View {
             }
         }
         #endif
+        .onReceive(NotificationCenter.default.publisher(for: .whisperOpenBookById)) { notification in
+            if let id = notification.object as? UUID,
+               let book = BookService.shared.fetchBook(id: id) {
+                self.incomingBook = book
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .whisperResumeReading)) { _ in
+            if let book = BookService.shared.fetchLatestBook() {
+                self.incomingBook = book
+            }
+        }
         .onDrop(of: [UTType.fileURL, UTType.item], isTargeted: $isDropTargeted) { providers in
             handleDroppedProviders(providers)
         }
@@ -200,14 +211,14 @@ struct ContentView: View {
                 await MainActor.run {
                     modelContext.insert(book)
                     try? modelContext.save()
-                    selectedTab = .library
-                    incomingBook = book
+                    BookService.shared.indexBookInSpotlight(book)
                     isProcessingSharedImport = false
+                    incomingBook = book
                 }
             } else {
                 await MainActor.run {
                     isProcessingSharedImport = false
-                    importErrorMessage = "Could not import \"\(url.lastPathComponent)\". Please ensure it is a valid EPUB, PDF, CBZ/CBR comic, or TXT file."
+                    importErrorMessage = "Could not parse or open the file. Ensure it is a valid CBZ, CBR, EPUB, PDF, or TXT file."
                     showImportError = true
                 }
             }
@@ -218,20 +229,10 @@ struct ContentView: View {
         guard let provider = providers.first else { return false }
         
         if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                let resolvedURL: URL?
-                if let url = item as? URL {
-                    resolvedURL = url
-                } else if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) {
-                    resolvedURL = url
-                } else {
-                    resolvedURL = nil
-                }
-                
-                if let fileURL = resolvedURL {
-                    Task { @MainActor in
-                        handleIncomingURL(fileURL)
-                    }
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url = url else { return }
+                DispatchQueue.main.async {
+                    self.handleIncomingURL(url)
                 }
             }
             return true
@@ -239,86 +240,66 @@ struct ContentView: View {
         return false
     }
     
+    // MARK: - macOS Flat Segmented Header Bar
     #if os(macOS)
+    private func tabForegroundColor(for tab: Tab) -> Color {
+        if selectedTab == tab { return .white }
+        if hoveredTab == tab { return .primary }
+        return .secondary
+    }
+
+    private func tabBackgroundColor(for tab: Tab) -> Color {
+        if selectedTab == tab { return Color.accentColor }
+        if hoveredTab == tab { return DS.Colors.hover }
+        return Color.clear
+    }
+
     private var macOSNavigationBar: some View {
         HStack(spacing: DS.Spacing.md) {
-            // App Branding (High Contrast Apple Style)
-            HStack(spacing: 8) {
-                Image(systemName: "book.pages.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.primary)
-                Text("Whisper")
-                    .font(.headline.weight(.bold))
-                    .foregroundColor(.primary)
-            }
-            .padding(.leading, DS.Spacing.md)
+            Text("Whisper")
+                .font(.headline.weight(.semibold))
+                .foregroundColor(.primary)
             
             Spacer()
             
-            // Clean segmented navigation bar with high-contrast Apple Books style selection & neutral hover
-            HStack(spacing: 2) {
+            HStack(spacing: DS.Spacing.xxs) {
                 ForEach(Tab.allCases) { tab in
-                    let isSelected = selectedTab == tab
-                    let isHovered = hoveredTab == tab && !isSelected
-                    
                     Button(action: {
-                        withAnimation(.easeInOut(duration: DS.Animation.fast)) {
+                        withAnimation(.easeInOut(duration: 0.15)) {
                             selectedTab = tab
                         }
                     }) {
-                        HStack(spacing: 8) {
+                        HStack(spacing: 6) {
                             Image(systemName: tab.iconName)
-                                .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
+                                .font(.system(size: 12, weight: .medium))
                             Text(tab.title)
-                                .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
+                                .font(.subheadline.weight(selectedTab == tab ? .semibold : .regular))
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 7)
-                        .background(
-                            RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
-                                .fill(
-                                    isSelected
-                                        ? DS.Colors.selection
-                                        : (isHovered ? DS.Colors.hover : Color.clear)
-                                )
-                        )
-                        .foregroundColor(
-                            isSelected
-                                ? DS.Colors.onSelection
-                                : (isHovered ? Color.primary : Color.secondary)
-                        )
-                        .contentShape(Rectangle())
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .foregroundColor(tabForegroundColor(for: tab))
+                        .background(tabBackgroundColor(for: tab))
+                        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous))
                     }
                     .buttonStyle(.plain)
-                    .onHover { hovering in
-                        withAnimation(.easeInOut(duration: 0.12)) {
-                            hoveredTab = hovering ? tab : nil
-                        }
+                    .onHover { isHovered in
+                        hoveredTab = isHovered ? tab : nil
                     }
                 }
             }
             .padding(3)
-            .background(
-                RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
-                    .fill(DS.Colors.unselectedFill)
-            )
+            .background(DS.Colors.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
                     .stroke(DS.Colors.border, lineWidth: 1)
             )
             
             Spacer()
-            
-            Color.clear
-                .frame(width: 100, height: 20)
         }
-        .padding(.horizontal, DS.Spacing.md)
-        .padding(.vertical, 8)
-        .background(DS.Colors.background)
+        .padding(.horizontal, DS.Spacing.lg)
+        .padding(.vertical, DS.Spacing.sm)
+        .background(DS.Colors.cardBackground)
     }
     #endif
-}
-
-#Preview {
-    ContentView()
 }

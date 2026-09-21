@@ -111,4 +111,13 @@ enum BookFormat: String, Codable {
   case pdf
   case comic  // CBR/CBZ (Mocked via images)
   case epub
+
+  var displayName: String {
+    switch self {
+    case .text: return "Plain Text"
+    case .pdf: return "PDF Document"
+    case .comic: return "Comic Book"
+    case .epub: return "EPUB Book"
+    }
+  }
 }

@@ -20,12 +20,14 @@ final class FileOpenManager: ObservableObject {
     }
 }
 
-#if os(macOS)
-import AppKit
-
 extension Notification.Name {
     static let whisperOpenFile = Notification.Name("whisperOpenFile")
+    static let whisperOpenBookById = Notification.Name("whisperOpenBookById")
+    static let whisperResumeReading = Notification.Name("whisperResumeReading")
 }
+
+#if os(macOS)
+import AppKit
 
 final class WhisperAppDelegate: NSObject, NSApplicationDelegate {
     func application(_ sender: NSApplication, openFiles filenames: [String]) {
@@ -159,7 +161,14 @@ struct WhisperApp: App {
                 showSplash = false
                 FileOpenManager.shared.openURL(url)
             }
+            .onReceive(NotificationCenter.default.publisher(for: .whisperOpenBookById)) { _ in
+                showSplash = false
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .whisperResumeReading)) { _ in
+                showSplash = false
+            }
             .onAppear {
+                BookService.shared.setModelContainer(sharedModelContainer)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                     withAnimation(.easeOut(duration: 0.5)) {
                         showSplash = false
@@ -168,10 +177,5 @@ struct WhisperApp: App {
             }
         }
         .modelContainer(sharedModelContainer)
-        #if os(macOS)
-        .windowToolbarStyle(.unified(showsTitle: true))
-        .windowStyle(.titleBar)
-        .defaultSize(width: 1100, height: 750)
-        #endif
     }
 }

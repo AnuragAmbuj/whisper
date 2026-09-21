@@ -8,12 +8,25 @@
 import SwiftUI
 
 struct Chapter: Identifiable, Codable {
-  var id = UUID()
+  var id: UUID = UUID()
   let title: String
   let path: String
 
   enum CodingKeys: String, CodingKey {
     case id, title, path
+  }
+
+  init(id: UUID = UUID(), title: String, path: String) {
+    self.id = id
+    self.title = title
+    self.path = path
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.id = (try? container.decode(UUID.self, forKey: .id)) ?? UUID()
+    self.title = try container.decode(String.self, forKey: .title)
+    self.path = try container.decode(String.self, forKey: .path)
   }
 }
 

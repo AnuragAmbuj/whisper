@@ -13,16 +13,73 @@ import UIKit
 import AppKit
 #endif
 import PDFKit
+#if canImport(CoreSpotlight)
+import CoreSpotlight
+#endif
 
 class BookService {
   static let shared = BookService()
+  var modelContainer: ModelContainer?
 
   private init() {}
+
+  @MainActor
+  func setModelContainer(_ container: ModelContainer) {
+    self.modelContainer = container
+  }
+
+  @MainActor
+  func fetchAllBooks() -> [Book] {
+    guard let context = modelContainer?.mainContext else { return [] }
+    let descriptor = FetchDescriptor<Book>(sortBy: [SortDescriptor(\.lastReadDate, order: .reverse)])
+    return (try? context.fetch(descriptor)) ?? []
+  }
+
+  @MainActor
+  func fetchBook(id: UUID) -> Book? {
+    guard let context = modelContainer?.mainContext else { return nil }
+    let descriptor = FetchDescriptor<Book>(predicate: #Predicate { $0.id == id })
+    return try? context.fetch(descriptor).first
+  }
+
+  @MainActor
+  func fetchLatestBook() -> Book? {
+    fetchAllBooks().first
+  }
+
+  // MARK: - CoreSpotlight Semantic Indexing
+  func indexBookInSpotlight(_ book: Book) {
+    #if canImport(CoreSpotlight)
+    let attributeSet = CSSearchableItemAttributeSet(contentType: .item)
+    attributeSet.title = book.title
+    attributeSet.creator = book.author
+    attributeSet.contentDescription = "\(book.format?.displayName ?? "Book") • \(book.author)"
+    attributeSet.keywords = [book.title, book.author, book.format?.displayName ?? ""]
+
+    let item = CSSearchableItem(
+      uniqueIdentifier: book.id.uuidString,
+      domainIdentifier: "com.anuragambuj.whisper.books",
+      attributeSet: attributeSet
+    )
+    CSSearchableIndex.default().indexSearchableItems([item]) { error in
+      if let error = error {
+        print("Spotlight: Indexing warning: \(error.localizedDescription)")
+      }
+    }
+    #endif
+  }
+
+  func deindexBookFromSpotlight(_ id: UUID) {
+    #if canImport(CoreSpotlight)
+    CSSearchableIndex.default().deleteSearchableItems(withIdentifiers: [id.uuidString]) { _ in }
+    #endif
+  }
 
   func seedBooks(context: ModelContext) {
     let books = generateRichSampleBooks()
     for book in books {
       context.insert(book)
+      indexBookInSpotlight(book)
     }
     try? context.save()
   }
@@ -40,6 +97,8 @@ class BookService {
             book.format = .text
             didMigrate = true
           }
+          // Ensure existing books are indexed in Spotlight
+          indexBookInSpotlight(book)
         }
         if didMigrate {
           try? context.save()
@@ -164,307 +223,309 @@ class BookService {
 
     "Don't follow you," said Filby.
 
-    "Can a cube that does not last for any time at all, have a real existence?"
+    "Can a cube that does not exist for any time at all, have a real existence?"
     """
   }
 
   private func createSamplePDF() -> URL? {
-    guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+    let fileManager = FileManager.default
+    guard let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
       return nil
     }
-    let pdfURL = docs.appendingPathComponent("Whisper_User_Guide.pdf")
+    let pdfURL = docs.appendingPathComponent("WhisperUserGuide.pdf")
 
-    #if canImport(UIKit)
-    let pageRect = CGRect(x: 0, y: 0, width: 612, height: 792)
-    let renderer = UIGraphicsPDFRenderer(bounds: pageRect)
-
-    let data = renderer.pdfData { context in
-      // Page 1: Welcome
-      context.beginPage()
-      drawPDFHeader(title: "Whisper Reader", subtitle: "User Guide & Architecture", in: pageRect)
-      drawPDFSection(
-        title: "Liquid Glass Experience",
-        body: "Whisper is engineered around fluid visual materials, dynamic light dispersion, and immersive typography. Built natively with SwiftData and SwiftUI, it delivers a seamless reading sanctuary across iPhone, iPad, and Mac.",
-        yOffset: 200,
-        pageRect: pageRect
-      )
-      drawPDFSection(
-        title: "Multi-Format Support",
-        body: "Whisper natively supports EPUB 3, PDFKit documents, CBZ/CBR comic books, and formatted plain text files with automatic spine indexing and deep table-of-contents navigation.",
-        yOffset: 340,
-        pageRect: pageRect
-      )
-
-      // Page 2: Reader Controls
-      context.beginPage()
-      drawPDFHeader(title: "Reader Capabilities", subtitle: "Gestures & Customization", in: pageRect)
-      drawPDFSection(
-        title: "Appearance Controls",
-        body: "Tap the typography icon in any reader view to configure theme palettes: Default glass, Pure Dark, Sepia parchment, and Clean Light. Adjust font scaling and line spacing in real time.",
-        yOffset: 200,
-        pageRect: pageRect
-      )
-      drawPDFSection(
-        title: "Smart Bookmarks",
-        body: "Tap the bookmark icon to mark your current page or chapter. Jump back to any saved bookmark from the bookmarks drawer at any time.",
-        yOffset: 340,
-        pageRect: pageRect
-      )
+    if fileManager.fileExists(atPath: pdfURL.path) {
+      return pdfURL
     }
 
-    try? data.write(to: pdfURL)
-    return pdfURL
-    #else
-    return nil
-    #endif
-  }
-
-  #if canImport(UIKit)
-  private func drawPDFHeader(title: String, subtitle: String, in rect: CGRect) {
-    let titleAttributes: [NSAttributedString.Key: Any] = [
-      .font: UIFont.boldSystemFont(ofSize: 28),
-      .foregroundColor: UIColor.label
-    ]
-    let subtitleAttributes: [NSAttributedString.Key: Any] = [
-      .font: UIFont.systemFont(ofSize: 16),
-      .foregroundColor: UIColor.secondaryLabel
-    ]
-
-    title.draw(at: CGPoint(x: 54, y: 72), withAttributes: titleAttributes)
-    subtitle.draw(at: CGPoint(x: 54, y: 110), withAttributes: subtitleAttributes)
-
-    // Decorative line
-    let path = UIBezierPath()
-    path.move(to: CGPoint(x: 54, y: 145))
-    path.addLine(to: CGPoint(x: rect.width - 54, y: 145))
-    UIColor.separator.setStroke()
-    path.lineWidth = 1
-    path.stroke()
-  }
-
-  private func drawPDFSection(title: String, body: String, yOffset: CGFloat, pageRect: CGRect) {
-    let titleAttributes: [NSAttributedString.Key: Any] = [
-      .font: UIFont.boldSystemFont(ofSize: 20),
-      .foregroundColor: UIColor.systemCyan
-    ]
-    let bodyAttributes: [NSAttributedString.Key: Any] = [
-      .font: UIFont.systemFont(ofSize: 14),
-      .foregroundColor: UIColor.label
-    ]
-
-    title.draw(at: CGPoint(x: 54, y: yOffset), withAttributes: titleAttributes)
-
-    let textRect = CGRect(x: 54, y: yOffset + 32, width: pageRect.width - 108, height: 100)
-    body.draw(in: textRect, withAttributes: bodyAttributes)
-  }
-  #endif
-
-  private func createSampleComic() -> Book {
-    let comicID = UUID()
-    let comicBook = Book(
-      id: comicID,
-      title: "The Cosmic Odyssey",
-      author: "Whisper Studios",
-      coverImageName: "",
-      content: "An interstellar voyage beyond the frontiers of the solar system. Issue #1: First Contact.",
-      progress: 0.0,
-      format: .comic
-    )
-
-    guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
-      return comicBook
-    }
-    let comicDir = docs.appendingPathComponent("Books", isDirectory: true).appendingPathComponent(comicID.uuidString, isDirectory: true)
-    try? FileManager.default.createDirectory(at: comicDir, withIntermediateDirectories: true)
-
-    let pageNames = ["page1.png", "page2.png", "page3.png", "page4.png"]
-
     #if canImport(UIKit)
-    let titles = [
-      ("THE COSMIC ODYSSEY", "Chapter 1: The Departure", UIColor(red: 0.1, green: 0.15, blue: 0.35, alpha: 1.0)),
-      ("ORBITAL STATION AETHEL", "Systems Nominal • Warp Core Primed", UIColor(red: 0.15, green: 0.25, blue: 0.45, alpha: 1.0)),
-      ("DEEP SPACE TRANSIT", "Entering Sector 9 • Sensors Detecting Anomaly", UIColor(red: 0.2, green: 0.1, blue: 0.35, alpha: 1.0)),
-      ("FIRST CONTACT", "The Signal is Received • To Be Continued...", UIColor(red: 0.05, green: 0.25, blue: 0.3, alpha: 1.0))
-    ]
+      let pageRect = CGRect(x: 0, y: 0, width: 612, height: 792)  // Standard US Letter
+      let renderer = UIGraphicsPDFRenderer(bounds: pageRect)
 
-    let renderer = UIGraphicsImageRenderer(size: CGSize(width: 800, height: 1200))
-    for (index, pageName) in pageNames.enumerated() {
-      let pageData = renderer.pngData { ctx in
-        let rect = CGRect(x: 0, y: 0, width: 800, height: 1200)
-        let info = titles[index]
-
-        // Background gradient
-        info.2.setFill()
-        ctx.fill(rect)
-
-        // Comic panel borders
-        let panelRect = rect.insetBy(dx: 40, dy: 40)
-        UIColor.white.withAlphaComponent(0.15).setFill()
-        ctx.fill(panelRect)
-
-        let border = UIBezierPath(rect: panelRect)
-        UIColor.white.withAlphaComponent(0.6).setStroke()
-        border.lineWidth = 4
-        border.stroke()
-
-        // Title
-        let titleAttrs: [NSAttributedString.Key: Any] = [
-          .font: UIFont.boldSystemFont(ofSize: 36),
-          .foregroundColor: UIColor.white
+      let data = renderer.pdfData { context in
+        // Page 1
+        context.beginPage()
+        let titleAttributes: [NSAttributedString.Key: Any] = [
+          .font: UIFont.systemFont(ofSize: 32, weight: .bold),
+          .foregroundColor: UIColor.label,
         ]
-        info.0.draw(at: CGPoint(x: 64, y: 80), withAttributes: titleAttrs)
+        let title = "Whisper"
+        title.draw(at: CGPoint(x: 50, y: 80), withAttributes: titleAttributes)
 
-        // Subtitle
-        let subAttrs: [NSAttributedString.Key: Any] = [
-          .font: UIFont.systemFont(ofSize: 20),
-          .foregroundColor: UIColor.cyan
+        let subtitleAttributes: [NSAttributedString.Key: Any] = [
+          .font: UIFont.systemFont(ofSize: 18, weight: .medium),
+          .foregroundColor: UIColor.secondaryLabel,
         ]
-        info.1.draw(at: CGPoint(x: 64, y: 140), withAttributes: subAttrs)
+        let subtitle = "Liquid Glass Digital Reader — User Guide"
+        subtitle.draw(at: CGPoint(x: 50, y: 125), withAttributes: subtitleAttributes)
 
-        // Page number
-        let pageNumAttrs: [NSAttributedString.Key: Any] = [
-          .font: UIFont.boldSystemFont(ofSize: 18),
-          .foregroundColor: UIColor.white.withAlphaComponent(0.5)
+        let bodyAttributes: [NSAttributedString.Key: Any] = [
+          .font: UIFont.systemFont(ofSize: 14, weight: .regular),
+          .foregroundColor: UIColor.label,
         ]
-        "PAGE \(index + 1)".draw(at: CGPoint(x: 700, y: 1140), withAttributes: pageNumAttrs)
+        let body1 = """
+          Welcome to Whisper, an immersive reading environment designed with Apple's premium \
+          Liquid Glass visual hierarchy. Whisper redefines document navigation through tactile, \
+          fluid gestures and adaptive ambient aesthetics.
+
+          Key Features:
+          • Multi-Format Support: Seamlessly read EPUB, PDF, CBZ/CBR comics, and plain text.
+          • Liquid Glass UI: Dynamic background mesh adapts smoothly to your content.
+          • Continuous & Paginated Modes: Switch effortlessly between standard vertical scrolling \
+          and horizontal column pagination.
+          • Tactile Gesture Controls: Pinch-to-zoom, swipe-to-turn, and responsive touch controls.
+          • Smart Bookmarking: Save your favorite quotes and notes with persistent memory.
+          """
+        let rect1 = CGRect(x: 50, y: 170, width: 512, height: 500)
+        body1.draw(in: rect1, withAttributes: bodyAttributes)
+
+        // Page 2
+        context.beginPage()
+        let page2Title = "Gesture Navigation & Controls"
+        page2Title.draw(at: CGPoint(x: 50, y: 80), withAttributes: titleAttributes)
+
+        let body2 = """
+          Whisper is built from the ground up for fluid, natural interaction:
+
+          • Tap center screen: Toggle reading controls, table of contents, and appearance settings.
+          • Swipe left/right: Turn pages in paginated mode.
+          • Smooth scroll: Enjoy 120Hz ProMotion inertial scrolling in continuous scroll mode.
+          • Pinch gesture: Dynamically scale text or zoom into detailed comic artwork.
+          • Long-press: Access contextual actions, text selection, and Apple Intelligence Writing Tools.
+
+          Enjoy your reading journey with Whisper.
+          """
+        let rect2 = CGRect(x: 50, y: 140, width: 512, height: 500)
+        body2.draw(in: rect2, withAttributes: bodyAttributes)
       }
 
-      let pageFileURL = comicDir.appendingPathComponent(pageName)
-      try? pageData.write(to: pageFileURL)
-    }
+      try? data.write(to: pdfURL)
+      return pdfURL
 
-    // Save pages.json
-    let pagesData = try? JSONEncoder().encode(pageNames)
-    try? pagesData?.write(to: comicDir.appendingPathComponent("pages.json"))
     #elseif canImport(AppKit)
-    let titlesMac = [
-      ("THE COSMIC ODYSSEY", "Chapter 1: The Departure", NSColor(red: 0.1, green: 0.15, blue: 0.35, alpha: 1.0)),
-      ("ORBITAL STATION AETHEL", "Systems Nominal • Warp Core Primed", NSColor(red: 0.15, green: 0.25, blue: 0.45, alpha: 1.0)),
-      ("DEEP SPACE TRANSIT", "Entering Sector 9 • Sensors Detecting Anomaly", NSColor(red: 0.2, green: 0.1, blue: 0.35, alpha: 1.0)),
-      ("FIRST CONTACT", "The Signal is Received • To Be Continued...", NSColor(red: 0.05, green: 0.25, blue: 0.3, alpha: 1.0))
-    ]
+      let pageRect = CGRect(x: 0, y: 0, width: 612, height: 792)
+      let pdfData = NSMutableData()
+      guard let consumer = CGDataConsumer(data: pdfData as CFMutableData) else { return nil }
+      var mediaBox = pageRect
+      guard let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
+        return nil
+      }
 
-    let size = NSSize(width: 800, height: 1200)
-    for (index, pageName) in pageNames.enumerated() {
-      let image = NSImage(size: size)
-      image.lockFocus()
-      let rect = NSRect(origin: .zero, size: size)
-      let info = titlesMac[index]
-
-      info.2.setFill()
-      rect.fill()
-
-      let panelRect = rect.insetBy(dx: 40, dy: 40)
-      NSColor.white.withAlphaComponent(0.15).setFill()
-      panelRect.fill()
-
-      let border = NSBezierPath(rect: panelRect)
-      NSColor.white.withAlphaComponent(0.6).setStroke()
-      border.lineWidth = 4
-      border.stroke()
+      // Page 1
+      context.beginPage(mediaBox: &mediaBox)
+      let gc1 = NSGraphicsContext(cgContext: context, flipped: false)
+      NSGraphicsContext.current = gc1
 
       let titleAttrs: [NSAttributedString.Key: Any] = [
-        .font: NSFont.boldSystemFont(ofSize: 36),
-        .foregroundColor: NSColor.white
+        .font: NSFont.systemFont(ofSize: 32, weight: .bold),
+        .foregroundColor: NSColor.labelColor,
       ]
-      info.0.draw(at: NSPoint(x: 64, y: 1060), withAttributes: titleAttrs)
+      let p1Title = NSAttributedString(string: "Whisper", attributes: titleAttrs)
+      p1Title.draw(at: CGPoint(x: 50, y: 680))
 
       let subAttrs: [NSAttributedString.Key: Any] = [
-        .font: NSFont.systemFont(ofSize: 20),
-        .foregroundColor: NSColor.cyan
+        .font: NSFont.systemFont(ofSize: 18, weight: .medium),
+        .foregroundColor: NSColor.secondaryLabelColor,
       ]
-      info.1.draw(at: NSPoint(x: 64, y: 1000), withAttributes: subAttrs)
+      let p1Sub = NSAttributedString(
+        string: "Liquid Glass Digital Reader — User Guide", attributes: subAttrs)
+      p1Sub.draw(at: CGPoint(x: 50, y: 645))
 
-      let pageNumAttrs: [NSAttributedString.Key: Any] = [
-        .font: NSFont.boldSystemFont(ofSize: 18),
-        .foregroundColor: NSColor.white.withAlphaComponent(0.5)
+      let bodyAttrs: [NSAttributedString.Key: Any] = [
+        .font: NSFont.systemFont(ofSize: 14, weight: .regular),
+        .foregroundColor: NSColor.labelColor,
       ]
-      "PAGE \(index + 1)".draw(at: NSPoint(x: 680, y: 40), withAttributes: pageNumAttrs)
+      let p1Body = NSAttributedString(
+        string:
+          "Welcome to Whisper, an immersive reading environment designed with Apple's premium Liquid Glass visual hierarchy. Whisper supports EPUB, PDF, CBZ/CBR comics, and plain text with continuous touch scrolling, typography customization, and bookmarking.",
+        attributes: bodyAttrs)
+      p1Body.draw(in: CGRect(x: 50, y: 400, width: 512, height: 220))
 
-      image.unlockFocus()
+      context.endPage()
 
-      if let tiffData = image.tiffRepresentation,
-         let bitmap = NSBitmapImageRep(data: tiffData),
-         let pngData = bitmap.representation(using: .png, properties: [:]) {
-        let pageFileURL = comicDir.appendingPathComponent(pageName)
-        try? pngData.write(to: pageFileURL)
-      }
+      // Page 2
+      context.beginPage(mediaBox: &mediaBox)
+      let gc2 = NSGraphicsContext(cgContext: context, flipped: false)
+      NSGraphicsContext.current = gc2
+
+      let p2Title = NSAttributedString(
+        string: "Gesture Navigation & Controls", attributes: titleAttrs)
+      p2Title.draw(at: CGPoint(x: 50, y: 680))
+
+      let p2Body = NSAttributedString(
+        string:
+          "Whisper is built from the ground up for fluid, natural interaction. Tap the center of the screen to reveal HUD controls, swipe or click chevrons to flip pages, and use smooth inertia scrolling for continuous reading.",
+        attributes: bodyAttrs)
+      p2Body.draw(in: CGRect(x: 50, y: 450, width: 512, height: 200))
+
+      context.endPage()
+      context.closePDF()
+
+      try? (pdfData as Data).write(to: pdfURL)
+      return pdfURL
+    #endif
+  }
+
+  private func createSampleComic() -> Book {
+    let bookID = UUID()
+    let comicDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+      .appendingPathComponent("Books")
+      .appendingPathComponent(bookID.uuidString)
+
+    try? FileManager.default.createDirectory(at: comicDir, withIntermediateDirectories: true)
+
+    let pageNames = ["Page 1 - Departure", "Page 2 - Hyperdrive", "Page 3 - Discovery"]
+    var imageFilenames: [String] = []
+
+    for (index, title) in pageNames.enumerated() {
+      let filename = "comic_page_\(index + 1).jpg"
+      let fileURL = comicDir.appendingPathComponent(filename)
+
+      #if canImport(UIKit)
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 800, height: 1200))
+        let img = renderer.image { ctx in
+          let colors: [UIColor] = [
+            UIColor(red: 0.08, green: 0.05, blue: 0.18, alpha: 1.0),
+            UIColor(red: 0.15, green: 0.10, blue: 0.35, alpha: 1.0),
+            UIColor(red: 0.05, green: 0.12, blue: 0.25, alpha: 1.0),
+          ]
+          let bg = colors[index % colors.count]
+          bg.setFill()
+          ctx.fill(CGRect(x: 0, y: 0, width: 800, height: 1200))
+
+          let textAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 42, weight: .heavy),
+            .foregroundColor: UIColor.white,
+          ]
+          let str = "THE COSMIC ODYSSEY"
+          str.draw(at: CGPoint(x: 60, y: 100), withAttributes: textAttrs)
+
+          let subAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 26, weight: .semibold),
+            .foregroundColor: UIColor.cyan,
+          ]
+          title.draw(at: CGPoint(x: 60, y: 160), withAttributes: subAttrs)
+        }
+        if let data = img.jpegData(compressionQuality: 0.85) {
+          try? data.write(to: fileURL)
+          imageFilenames.append(filename)
+        }
+      #elseif canImport(AppKit)
+        let img = NSImage(size: NSSize(width: 800, height: 1200))
+        img.lockFocus()
+        let colors = [
+          NSColor(calibratedRed: 0.08, green: 0.05, blue: 0.18, alpha: 1.0),
+          NSColor(calibratedRed: 0.15, green: 0.10, blue: 0.35, alpha: 1.0),
+          NSColor(calibratedRed: 0.05, green: 0.12, blue: 0.25, alpha: 1.0),
+        ]
+        colors[index % colors.count].setFill()
+        NSRect(x: 0, y: 0, width: 800, height: 1200).fill()
+
+        let titleAttrs: [NSAttributedString.Key: Any] = [
+          .font: NSFont.systemFont(ofSize: 42, weight: .heavy),
+          .foregroundColor: NSColor.white,
+        ]
+        let titleStr = NSAttributedString(string: "THE COSMIC ODYSSEY", attributes: titleAttrs)
+        titleStr.draw(at: NSPoint(x: 60, y: 1050))
+
+        let subAttrs: [NSAttributedString.Key: Any] = [
+          .font: NSFont.systemFont(ofSize: 26, weight: .semibold),
+          .foregroundColor: NSColor.cyan,
+        ]
+        let subStr = NSAttributedString(string: title, attributes: subAttrs)
+        subStr.draw(at: NSPoint(x: 60, y: 990))
+
+        img.unlockFocus()
+
+        if let tiff = img.tiffRepresentation,
+          let rep = NSBitmapImageRep(data: tiff),
+          let data = rep.representation(using: .jpeg, properties: [:])
+        {
+          try? data.write(to: fileURL)
+          imageFilenames.append(filename)
+        }
+      #endif
     }
 
-    let pagesData = try? JSONEncoder().encode(pageNames)
-    try? pagesData?.write(to: comicDir.appendingPathComponent("pages.json"))
-    #endif
-
-    comicBook.addBookmark(Bookmark(pageOrLocation: 0, note: "Cover & Launch"))
-    return comicBook
+    return Book(
+      id: bookID,
+      title: "The Cosmic Odyssey",
+      author: "Nova Stellaris",
+      coverImageName: "",
+      content: "Graphic comic book containing illustrated interplanetary space exploration scenes.",
+      progress: 0.0,
+      format: .comic,
+      url: comicDir,
+      sampleImages: imageFilenames
+    )
   }
 
   private func createSampleEPUB() -> Book {
-    let epubID = UUID()
-    let epubBook = Book(
-      id: epubID,
-      title: "Alice in Wonderland",
-      author: "Lewis Carroll",
-      coverImageName: "",
-      content: "Alice falls down a rabbit hole into a fantasy realm populated by anthropomorphic creatures.",
-      progress: 0.0,
-      format: .epub
-    )
+    let bookID = UUID()
+    let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+    let epubDir = docs.appendingPathComponent("Books").appendingPathComponent(bookID.uuidString)
 
-    guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
-      return epubBook
-    }
-    let epubDir = docs.appendingPathComponent("Books").appendingPathComponent(epubID.uuidString)
     try? FileManager.default.createDirectory(at: epubDir, withIntermediateDirectories: true)
 
-    let ch1Content = """
-    <!DOCTYPE html>
-    <html>
-    <head><meta charset="utf-8"/><title>Chapter 1</title>
-    <style>body { font-family: -apple-system, serif; padding: 20px; line-height: 1.6; color: #f0f0f0; }</style>
-    </head>
-    <body>
-    <h2>Chapter I: Down the Rabbit-Hole</h2>
-    <p>Alice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to do: once or twice she had peeped into the book her sister was reading, but it had no pictures or conversations in it, "and what is the use of a book," thought Alice "without pictures or conversations?"</p>
-    <p>So she was considering in her own mind (as well as she could, for the hot day made her feel very sleepy and stupid), whether the pleasure of making a daisy-chain would be worth the trouble of getting up and picking the daisies, when suddenly a White Rabbit with pink eyes ran close by her.</p>
-    <p>There was nothing so VERY remarkable in that; nor did Alice think it so VERY much out of the way to hear the Rabbit say to itself, "Oh dear! Oh dear! I shall be late!"</p>
-    </body>
-    </html>
-    """
+    let ch1 = """
+      <!DOCTYPE html>
+      <html>
+      <head><title>Chapter 1: Down the Rabbit-Hole</title><meta charset="utf-8"></head>
+      <body>
+        <h1>Alice's Adventures in Wonderland</h1>
+        <h2>Chapter I: Down the Rabbit-Hole</h2>
+        <p>Alice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to do: once or twice she had peeped into the book her sister was reading, but it had no pictures or conversations in it, "and what is the use of a book," thought Alice "without pictures or conversations?"</p>
+        <p>So she was considering in her own mind (as well as she could, for the hot day made her feel very sleepy and stupid), whether the pleasure of making a daisy-chain would be worth the trouble of getting up and picking the daisies, when suddenly a White Rabbit with pink eyes ran close by her.</p>
+        <p>There was nothing so <i>very</i> remarkable in that; nor did Alice think it so <i>very</i> much out of the way to hear the Rabbit say to itself, "Oh dear! Oh dear! I shall be late!" (when she thought it over afterwards, it occurred to her that she ought to have wondered at this, but at the time it all seemed quite natural); but when the Rabbit actually <i>took a watch out of its waistcoat-pocket</i>, and looked at it, and then hurried on, Alice started to her feet, for it flashed across her mind that she had never before seen a rabbit with either a waistcoat-pocket, or a watch to take out of it, and burning with curiosity, she ran across the field after it, and fortunately was just in time to see it pop down a large rabbit-hole under the hedge.</p>
+        <p>In another moment down went Alice after it, never once considering in the world how in the world she was to get out again.</p>
+      </body>
+      </html>
+      """
 
-    let ch2Content = """
-    <!DOCTYPE html>
-    <html>
-    <head><meta charset="utf-8"/><title>Chapter 2</title>
-    <style>body { font-family: -apple-system, serif; padding: 20px; line-height: 1.6; color: #f0f0f0; }</style>
-    </head>
-    <body>
-    <h2>Chapter II: The Pool of Tears</h2>
-    <p>"Curiouser and curiouser!" cried Alice (she was so much surprised, that for the moment she quite forgot how to speak good English); "now I'm opening out like the largest telescope that ever was! Good-bye, feet!"</p>
-    <p>And she began thinking over all the children she knew that were of the same age as herself, to see if she could have been changed for any of them.</p>
-    <p>"I'm sure I'm not Ada," she said, "for her hair goes in such long ringlets, and mine doesn't go in ringlets at all; and I'm sure I can't be Mabel, for I know all sorts of things, and she, oh! she knows such a very little!"</p>
-    </body>
-    </html>
-    """
+    let ch2 = """
+      <!DOCTYPE html>
+      <html>
+      <head><title>Chapter 2: The Pool of Tears</title><meta charset="utf-8"></head>
+      <body>
+        <h1>Alice's Adventures in Wonderland</h1>
+        <h2>Chapter II: The Pool of Tears</h2>
+        <p>"Curiouser and curiouser!" cried Alice (she was so much surprised, that for the moment she quite forgot how to speak good English); "now I'm opening out like the largest telescope that ever was! Good-bye, feet!" (for when she looked down at her feet, they seemed to be almost out of sight, they were getting so far off).</p>
+        <p>"Oh, my poor little feet, I wonder who will put on your shoes and stockings for you now, dears? I'm sure <i>I</i> shan't be able! I shall be a great deal too far off to trouble myself about you: you must manage the best way you can;—but I must be kind to them," thought Alice, "or perhaps they won't walk the way I want to go! Let me see: I'll give them a new pair of boots every Christmas."</p>
+        <p>And she went on planning to herself how she would manage it. "They must go by the carrier," she thought; "and how funny it'll seem, sending presents to one's own feet! And how odd the directions will look!"</p>
+      </body>
+      </html>
+      """
 
-    try? ch1Content.write(to: epubDir.appendingPathComponent("ch1.xhtml"), atomically: true, encoding: .utf8)
-    try? ch2Content.write(to: epubDir.appendingPathComponent("ch2.xhtml"), atomically: true, encoding: .utf8)
+    let ch1URL = epubDir.appendingPathComponent("chapter1.html")
+    let ch2URL = epubDir.appendingPathComponent("chapter2.html")
 
-    // Write spine.json
-    let spine = ["ch1.xhtml", "ch2.xhtml"]
-    let spineData = try? JSONEncoder().encode(spine)
-    try? spineData?.write(to: epubDir.appendingPathComponent("spine.json"))
+    try? ch1.write(to: ch1URL, atomically: true, encoding: .utf8)
+    try? ch2.write(to: ch2URL, atomically: true, encoding: .utf8)
 
-    // Write toc.json
+    // Save spine.json
+    let spine = ["chapter1.html", "chapter2.html"]
+    if let data = try? JSONEncoder().encode(spine) {
+      try? data.write(to: epubDir.appendingPathComponent("spine.json"))
+    }
+
+    // Save toc.json
     let toc = [
-      Chapter(title: "Chapter I: Down the Rabbit-Hole", path: "ch1.xhtml"),
-      Chapter(title: "Chapter II: The Pool of Tears", path: "ch2.xhtml")
+      Chapter(title: "Chapter I: Down the Rabbit-Hole", path: "chapter1.html"),
+      Chapter(title: "Chapter II: The Pool of Tears", path: "chapter2.html"),
     ]
-    let tocData = try? JSONEncoder().encode(toc)
-    try? tocData?.write(to: epubDir.appendingPathComponent("toc.json"))
+    if let data = try? JSONEncoder().encode(toc) {
+      try? data.write(to: epubDir.appendingPathComponent("toc.json"))
+    }
 
-    epubBook.url = epubDir
-    epubBook.addBookmark(Bookmark(pageOrLocation: 0, note: "The Rabbit Hole Begins"))
-    return epubBook
+    return Book(
+      id: bookID,
+      title: "Alice's Adventures in Wonderland",
+      author: "Lewis Carroll",
+      coverImageName: "",
+      content: "The timeless fantasy classic of Alice falling down the rabbit hole.",
+      progress: 0.0,
+      format: .epub,
+      url: epubDir
+    )
   }
 }

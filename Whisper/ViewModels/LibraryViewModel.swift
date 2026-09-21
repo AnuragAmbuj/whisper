@@ -38,10 +38,7 @@ class LibraryViewModel {
         
         let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedQuery.isEmpty {
-            result = result.filter {
-                $0.title.localizedCaseInsensitiveContains(trimmedQuery) ||
-                $0.author.localizedCaseInsensitiveContains(trimmedQuery)
-            }
+            result = TypeSafeService.shared.rerank(books: result, query: trimmedQuery)
         }
         
         return result

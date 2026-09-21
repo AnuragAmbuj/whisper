@@ -5,49 +5,48 @@
 //  Created by Anurag Ambuj on 29/12/25.
 //
 
-import PDFKit
-import SwiftUI
+import Foundation
+import SwiftData
 import UniformTypeIdentifiers
+import PDFKit
 
-enum ImportError: Error, LocalizedError {
-    case fileNotFound
-    case copyFailed
-    case unsupportedFormat
-    case parseFailed(String)
-    
-    var errorDescription: String? {
-        switch self {
-        case .fileNotFound: return "File not found"
-        case .copyFailed: return "Failed to copy file"
-        case .unsupportedFormat: return "Unsupported file format"
-        case .parseFailed(let message): return "Import failed: \(message)"
-        }
-    }
-}
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 @MainActor
 class ImportService {
     static let shared = ImportService()
     
-    static let supportedTypes: [UTType] = [
-        .pdf,
-        .epub,
-        .zip,
-        UTType(filenameExtension: "cbz") ?? .zip,
-        UTType(filenameExtension: "cbr") ?? .data,
-        .plainText
-    ]
-    
     private init() {}
     
-    func importFile(at sourceURL: URL) async -> Book? {
-        let accessing = sourceURL.startAccessingSecurityScopedResource()
-        defer {
-            if accessing { sourceURL.stopAccessingSecurityScopedResource() }
+    nonisolated static var supportedTypes: [UTType] {
+        var types: [UTType] = [.pdf, .plainText, .zip]
+        
+        if let epub = UTType("org.idpf.epub-container") {
+            types.append(epub)
+        }
+        if let cbz = UTType("com.macitbetter.cbz-archive") {
+            types.append(cbz)
+        }
+        if let cbr = UTType("com.macitbetter.cbr-archive") {
+            types.append(cbr)
         }
         
+        return types
+    }
+    
+    /// Imports a file from a URL and creates a Book object
+    /// - Parameter sourceURL: The URL of the file to import
+    /// - Returns: The imported Book, or nil if import failed
+    func importFile(at sourceURL: URL) async -> Book? {
+        return importFileSync(at: sourceURL)
+    }
+    
+    private func importFileSync(at sourceURL: URL) -> Book? {
         let fileManager = FileManager.default
-        
         guard fileManager.fileExists(atPath: sourceURL.path) else {
             print("ImportService: File not found at \(sourceURL.path)")
             return nil
@@ -57,14 +56,11 @@ class ImportService {
             return nil
         }
         
-        let booksDir = documentsDir.appendingPathComponent("Books", isDirectory: true)
-        let coversDir = documentsDir.appendingPathComponent("Covers", isDirectory: true)
-        
+        let booksDir = documentsDir.appendingPathComponent("Books")
         do {
             try fileManager.createDirectory(at: booksDir, withIntermediateDirectories: true)
-            try fileManager.createDirectory(at: coversDir, withIntermediateDirectories: true)
         } catch {
-            print("ImportService: Failed to create directories: \(error)")
+            print("ImportService: Failed to create Books directory: \(error)")
             return nil
         }
         
@@ -146,6 +142,17 @@ class ImportService {
             }
         }
         
+        // Enhance with TypeSafe metadata extraction if filename is formatted with author/title
+        if author == "Unknown Author" || title == sourceURL.deletingPathExtension().lastPathComponent {
+            let extracted = TypeSafeService.shared.extractCleanMetadata(from: fileName)
+            if title == sourceURL.deletingPathExtension().lastPathComponent && !extracted.title.isEmpty {
+                title = extracted.title
+            }
+            if author == "Unknown Author" && extracted.author != "Unknown Author" {
+                author = extracted.author
+            }
+        }
+        
         return Book(
             title: title,
             author: author,
@@ -171,6 +178,12 @@ class ImportService {
         }
         
         if let book = ComicParser.shared.parse(sourceURL: destinationURL) {
+            if book.author == "Unknown Author" {
+                let extracted = TypeSafeService.shared.extractCleanMetadata(from: destinationURL.lastPathComponent)
+                if extracted.author != "Unknown Author" {
+                    book.author = extracted.author
+                }
+            }
             try? FileManager.default.removeItem(at: destinationURL)
             return book
         }
@@ -195,7 +208,7 @@ class ImportService {
             return nil
         }
         
-        let title = sourceURL.deletingPathExtension().lastPathComponent
+        let metadata = TypeSafeService.shared.extractCleanMetadata(from: fileName)
         var content = "Unable to read content"
         
         if let textContent = try? String(contentsOf: destinationURL, encoding: .utf8) {
@@ -203,8 +216,8 @@ class ImportService {
         }
         
         return Book(
-            title: title,
-            author: "Unknown Author",
+            title: metadata.title,
+            author: metadata.author,
             coverImageName: "",
             content: content,
             format: .text,
@@ -224,18 +237,14 @@ class ImportService {
             return coverName
         }
         #elseif canImport(AppKit)
-        if let tiffData = thumbnail.tiffRepresentation,
-           let bitmap = NSBitmapImageRep(data: tiffData),
-           let pngData = bitmap.representation(using: .png, properties: [:]) {
-            try? pngData.write(to: coverURL)
+        if let tiff = thumbnail.tiffRepresentation,
+           let rep = NSBitmapImageRep(data: tiff),
+           let data = rep.representation(using: .png, properties: [:]) {
+            try? data.write(to: coverURL)
             return coverName
         }
         #endif
         
         return ""
     }
-}
-
-extension UTType {
-    static let epub = UTType(filenameExtension: "epub") ?? .data
 }

@@ -23,9 +23,26 @@ enum EpubReadingMode: String, CaseIterable, Identifiable {
   }
 }
 
+// MARK: - Weak Script Message Handler to Prevent Retain Cycles
+private final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
+  private weak var delegate: WKScriptMessageHandler?
+
+  init(delegate: WKScriptMessageHandler) {
+    self.delegate = delegate
+    super.init()
+  }
+
+  func userContentController(
+    _ userContentController: WKUserContentController,
+    didReceive message: WKScriptMessage
+  ) {
+    delegate?.userContentController(userContentController, didReceive: message)
+  }
+}
+
 // MARK: - Dedicated Controller for WebKit Navigation & Reading Engine
 @MainActor
-final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelegate {
+final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelegate, WKScriptMessageHandler {
   @Published var isLoading: Bool = true
   @Published var currentPage: Int = 1
   @Published var totalPages: Int = 1
@@ -39,6 +56,7 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
   private var watchdogTask: Task<Void, Never>?
 
   var onProgressUpdated: ((Double) -> Void)?
+  var onTapRecognized: (() -> Void)?
 
   init(bookDir: URL) {
     self.bookDir = bookDir
@@ -49,6 +67,12 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
     self.webView = webView
     webView.navigationDelegate = self
 
+    webView.configuration.userContentController.removeScriptMessageHandler(forName: "whisperTap")
+    webView.configuration.userContentController.add(WeakScriptMessageHandler(delegate: self), name: "whisperTap")
+
+    webView.configuration.userContentController.removeScriptMessageHandler(forName: "whisperProgress")
+    webView.configuration.userContentController.add(WeakScriptMessageHandler(delegate: self), name: "whisperProgress")
+
     #if os(iOS)
       webView.scrollView.bounces = true
       webView.scrollView.alwaysBounceVertical = (readingMode == .scroll)
@@ -56,6 +80,8 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
       webView.scrollView.showsHorizontalScrollIndicator = false
       webView.scrollView.minimumZoomScale = 1.0
       webView.scrollView.maximumZoomScale = 4.0
+      webView.scrollView.isScrollEnabled = true
+      webView.isUserInteractionEnabled = true
     #else
       webView.allowsMagnification = true
     #endif
@@ -123,6 +149,25 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
     }
   }
 
+  // MARK: - WKScriptMessageHandler
+
+  nonisolated func userContentController(
+    _ userContentController: WKUserContentController,
+    didReceive message: WKScriptMessage
+  ) {
+    Task { @MainActor in
+      if message.name == "whisperTap" {
+        self.onTapRecognized?()
+      } else if message.name == "whisperProgress" {
+        if let body = message.body as? [String: Any],
+           let progress = body["progress"] as? Double {
+          self.scrollPercentage = progress
+          self.onProgressUpdated?(progress)
+        }
+      }
+    }
+  }
+
   // MARK: - Script Injection & Styling
 
   private var cachedTheme: AppTheme = .default
@@ -176,7 +221,8 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
             --whisper-text: \(textHex);
             --whisper-font-size: \(fontSize)px;
             --whisper-line-height: \(theme.lineHeight);
-          }\n
+          }
+
           * {
             box-sizing: border-box !important;
             -webkit-tap-highlight-color: transparent;
@@ -186,7 +232,10 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
             background-color: var(--whisper-bg) !important;
             color: var(--whisper-text) !important;
             -webkit-text-size-adjust: 100% !important;
-            \(isPaged ? "overflow-x: scroll !important; overflow-y: hidden !important; scrollbar-width: none !important;" : "overflow-y: auto !important; overflow-x: hidden !important;")
+            \(isPaged ?
+              "height: 100vh !important; width: 100vw !important; overflow: hidden !important;" :
+              "min-height: 100% !important; overflow-x: hidden !important;"
+            )
           }
 
           html::-webkit-scrollbar { display: none !important; }
@@ -201,41 +250,60 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
             word-wrap: break-word !important;
             overflow-wrap: break-word !important;
             \(isPaged ?
-              "height: calc(100vh - 120px) !important; width: 100vw !important; padding: 24px 20px 80px 20px !important; column-width: calc(100vw - 40px) !important; column-gap: 40px !important; column-fill: auto !important;"
+              "height: calc(100vh - 100px) !important; width: 100vw !important; padding: 24px 24px 70px 24px !important; column-width: calc(100vw - 48px) !important; column-gap: 48px !important; column-fill: auto !important; overflow-x: scroll !important; overflow-y: hidden !important; scrollbar-width: none !important; -webkit-overflow-scrolling: touch !important;"
               :
-              "max-width: 760px !important; margin: 0 auto !important; padding: 32px 24px 120px 24px !important;"
+              "max-width: 740px !important; margin: 0 auto !important; padding: 32px 24px 140px 24px !important; overflow-x: hidden !important;"
             )
           }
 
-          p, div, span, li, blockquote, dd, dt {
-            color: var(--whisper-text) !important;
-            font-size: 1em !important;
-            line-height: inherit !important;
-          }
+          body::-webkit-scrollbar { display: none !important; }
 
+          /* Preserve natural heading scale & font weights */
           h1, h2, h3, h4, h5, h6 {
             color: var(--whisper-text) !important;
             font-weight: 700 !important;
             line-height: 1.3 !important;
-            margin-top: 1.2em !important;
+            margin-top: 1.4em !important;
             margin-bottom: 0.6em !important;
+            break-after: avoid !important;
+            page-break-after: avoid !important;
           }
-          h1 { font-size: 1.6em !important; }
-          h2 { font-size: 1.35em !important; }
-          h3 { font-size: 1.2em !important; }
+          h1 { font-size: 1.7em !important; }
+          h2 { font-size: 1.4em !important; }
+          h3 { font-size: 1.22em !important; }
+          h4 { font-size: 1.1em !important; }
 
+          /* Clean paragraph typography */
           p {
-            margin: 0 0 1em 0 !important;
-            text-align: justify !important;
-            text-justify: inter-word !important;
+            color: var(--whisper-text) !important;
+            margin: 0 0 1.15em 0 !important;
+            line-height: var(--whisper-line-height) !important;
+            -webkit-hyphens: auto;
+            hyphens: auto;
+            word-break: break-word;
+          }
+
+          li, blockquote, dd, dt, figcaption {
+            color: var(--whisper-text) !important;
+            line-height: var(--whisper-line-height) !important;
+          }
+
+          blockquote {
+            border-left: 3px solid var(--whisper-text);
+            opacity: 0.85;
+            margin: 1.2em 0 1.2em 1.2em !important;
+            padding-left: 1em !important;
+            font-style: italic;
           }
 
           img, svg, video {
             max-width: 100% !important;
-            height: auto !important;
+            \(isPaged ? "max-height: calc(100vh - 160px) !important; object-fit: contain !important;" : "height: auto !important;")
             display: block !important;
-            margin: 16px auto !important;
+            margin: 18px auto !important;
             border-radius: 8px !important;
+            break-inside: avoid !important;
+            page-break-inside: avoid !important;
           }
 
           table {
@@ -251,11 +319,60 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
         `;
         document.head.appendChild(style);
 
-        // 4. Calculate metrics
+        // 4. Install click/tap detection to toggle HUD without blocking scrolling or gestures
+        if (!window._whisperTapInstalled) {
+          window._whisperTapInstalled = true;
+          var touchStartX = 0, touchStartY = 0, touchStartTime = 0;
+          window.addEventListener('touchstart', function(e) {
+            if (e.touches.length === 1) {
+              touchStartX = e.touches[0].clientX;
+              touchStartY = e.touches[0].clientY;
+              touchStartTime = Date.now();
+            }
+          }, { passive: true });
+
+          window.addEventListener('touchend', function(e) {
+            if (Date.now() - touchStartTime < 350) {
+              var touch = e.changedTouches[0];
+              var dx = Math.abs(touch.clientX - touchStartX);
+              var dy = Math.abs(touch.clientY - touchStartY);
+              if (dx < 12 && dy < 12) {
+                var target = e.target;
+                if (target && (target.tagName === 'A' || target.tagName === 'BUTTON' || target.closest('a'))) {
+                  return; // Allow link taps
+                }
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.whisperTap) {
+                  window.webkit.messageHandlers.whisperTap.postMessage({ x: touch.clientX, y: touch.clientY });
+                }
+              }
+            }
+          }, { passive: true });
+
+          window.addEventListener('click', function(e) {
+            if (e.target && (e.target.tagName === 'A' || e.target.tagName === 'BUTTON' || e.target.closest('a'))) {
+              return;
+            }
+            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.whisperTap) {
+              window.webkit.messageHandlers.whisperTap.postMessage({ x: e.clientX, y: e.clientY });
+            }
+          });
+
+          // Scroll progress tracking
+          window.addEventListener('scroll', function() {
+            var scrollY = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
+            var maxScroll = Math.max(1, (document.documentElement.scrollHeight || document.body.scrollHeight || 1) - window.innerHeight);
+            var pct = Math.min(1.0, Math.max(0.0, scrollY / maxScroll));
+            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.whisperProgress) {
+              window.webkit.messageHandlers.whisperProgress.postMessage({ progress: pct });
+            }
+          }, { passive: true });
+        }
+
+        // 5. Calculate metrics for paginated mode
         var winW = window.innerWidth || document.documentElement.clientWidth || 390;
-        var scrollW = document.documentElement.scrollWidth || document.body.scrollWidth || winW;
+        var scrollW = document.body.scrollWidth || document.documentElement.scrollWidth || winW;
         var pages = Math.max(1, Math.round(scrollW / winW));
-        var currentScrollX = window.scrollX || document.documentElement.scrollLeft || 0;
+        var currentScrollX = document.body.scrollLeft || window.scrollX || 0;
         var currPage = Math.min(pages, Math.max(1, Math.round(currentScrollX / winW) + 1));
 
         return {
@@ -296,13 +413,18 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
 
     let js = """
       (function() {
-        var winW = window.innerWidth;
-        var totalW = document.documentElement.scrollWidth;
-        var pages = Math.max(1, Math.round(totalW / winW));
-        var curr = Math.min(pages, Math.max(1, Math.round(window.scrollX / winW) + 1));
+        var winW = window.innerWidth || 390;
+        var scrollW = document.body.scrollWidth || document.documentElement.scrollWidth || winW;
+        var pages = Math.max(1, Math.round(scrollW / winW));
+        var currX = document.body.scrollLeft || window.scrollX || 0;
+        var curr = Math.min(pages, Math.max(1, Math.round(currX / winW) + 1));
         if (curr < pages) {
           var targetX = curr * winW;
-          window.scrollTo({ left: targetX, top: 0, behavior: 'smooth' });
+          if (document.body.scrollTo) {
+            document.body.scrollTo({ left: targetX, top: 0, behavior: 'smooth' });
+          } else {
+            window.scrollTo({ left: targetX, top: 0, behavior: 'smooth' });
+          }
           return { handled: true, page: curr + 1, total: pages };
         }
         return { handled: false, page: curr, total: pages };
@@ -336,13 +458,18 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
 
     let js = """
       (function() {
-        var winW = window.innerWidth;
-        var totalW = document.documentElement.scrollWidth;
-        var pages = Math.max(1, Math.round(totalW / winW));
-        var curr = Math.min(pages, Math.max(1, Math.round(window.scrollX / winW) + 1));
+        var winW = window.innerWidth || 390;
+        var scrollW = document.body.scrollWidth || document.documentElement.scrollWidth || winW;
+        var pages = Math.max(1, Math.round(scrollW / winW));
+        var currX = document.body.scrollLeft || window.scrollX || 0;
+        var curr = Math.min(pages, Math.max(1, Math.round(currX / winW) + 1));
         if (curr > 1) {
           var targetX = (curr - 2) * winW;
-          window.scrollTo({ left: targetX, top: 0, behavior: 'smooth' });
+          if (document.body.scrollTo) {
+            document.body.scrollTo({ left: targetX, top: 0, behavior: 'smooth' });
+          } else {
+            window.scrollTo({ left: targetX, top: 0, behavior: 'smooth' });
+          }
           return { handled: true, page: curr - 1, total: pages };
         }
         return { handled: false, page: curr, total: pages };
@@ -443,51 +570,37 @@ struct EpubReaderView: View {
           .animation(.easeInOut(duration: 0.25), value: controller.isLoading)
       }
 
-      // Invisible Tap Zones for Page Navigation & HUD Toggle
-      HStack(spacing: 0) {
-        // Left zone: Previous page
-        Color.clear
-          .frame(width: 80)
-          .contentShape(Rectangle())
-          .onTapGesture {
-            previousPageOrChapter()
-          }
-
-        // Center zone: Toggle HUD
-        Color.clear
-          .frame(maxWidth: .infinity)
-          .contentShape(Rectangle())
-          .onTapGesture {
-            withAnimation(.easeInOut(duration: 0.2)) {
-              showHUD.toggle()
-            }
-          }
-
-        // Right zone: Next page
-        Color.clear
-          .frame(width: 80)
-          .contentShape(Rectangle())
-          .onTapGesture {
-            nextPageOrChapter()
-          }
-      }
-      .ignoresSafeArea()
-
-      // Horizontal Swipe Gesture for Paginated Mode
+      // Tap Zones for Paginated Mode ONLY.
+      // In Continuous Scroll Mode, touches pass 100% directly to WKWebView for native touch scrolling & momentum!
       if controller.readingMode == .paginated {
-        Color.clear
-          .contentShape(Rectangle())
-          .allowsHitTesting(false)
-          .gesture(
-            DragGesture(minimumDistance: 35, coordinateSpace: .local)
-              .onEnded { value in
-                if value.translation.width < -50 {
-                  nextPageOrChapter()
-                } else if value.translation.width > 50 {
-                  previousPageOrChapter()
-                }
+        HStack(spacing: 0) {
+          // Left zone: Previous page
+          Color.clear
+            .frame(width: 80)
+            .contentShape(Rectangle())
+            .onTapGesture {
+              previousPageOrChapter()
+            }
+
+          // Center zone: Toggle HUD
+          Color.clear
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture {
+              withAnimation(.easeInOut(duration: 0.2)) {
+                showHUD.toggle()
               }
-          )
+            }
+
+          // Right zone: Next page
+          Color.clear
+            .frame(width: 80)
+            .contentShape(Rectangle())
+            .onTapGesture {
+              nextPageOrChapter()
+            }
+        }
+        .ignoresSafeArea()
       }
 
       // Interactive Modern Loader Animation
@@ -544,7 +657,8 @@ struct EpubReaderView: View {
                       .font(.caption2)
                       .foregroundColor(theme.textColor.opacity(0.7))
                   } else {
-                    Text("Scroll Mode")
+                    let pct = Int(controller.scrollPercentage * 100)
+                    Text("Scroll Mode • \(pct)%")
                       .font(.caption2)
                       .foregroundColor(theme.textColor.opacity(0.7))
                   }
@@ -640,6 +754,21 @@ struct EpubReaderView: View {
   private func setupAndLoad() {
     let webView = WebKitWarmer.shared.createWebView(allowFileAccess: true)
     controller.attach(webView: webView)
+
+    controller.onTapRecognized = {
+      withAnimation(.easeInOut(duration: 0.2)) {
+        self.showHUD.toggle()
+      }
+    }
+
+    controller.onProgressUpdated = { progress in
+      if !self.chapterPaths.isEmpty {
+        let baseProg = Double(self.currentChapterIndex) / Double(max(1, self.chapterPaths.count))
+        let chapterSlice = 1.0 / Double(max(1, self.chapterPaths.count))
+        let totalProg = min(1.0, baseProg + (chapterSlice * progress))
+        self.onProgressChanged?(totalProg)
+      }
+    }
 
     Task {
       let paths = await resolveChapterPaths(bookDir: bookDir)
