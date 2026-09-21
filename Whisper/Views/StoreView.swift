@@ -26,12 +26,13 @@ struct StoreView: View {
             list = list.filter { $0.category == selectedCategory }
         }
         if !searchText.isEmpty {
-            list = list.filter {
-                $0.title.localizedCaseInsensitiveContains(searchText) ||
-                $0.author.localizedCaseInsensitiveContains(searchText)
-            }
+            list = TypeSafeService.shared.rerankStoreBooks(books: list, query: searchText)
         }
         return list
+    }
+
+    private var recommendedBooks: [StoreBook] {
+        TypeSafeService.shared.recommendStoreBooks(library: existingBooks, catalog: storeService.catalog, limit: 4)
     }
     
     var body: some View {
@@ -59,6 +60,10 @@ struct StoreView: View {
                     #endif
                 
                 categoryChipsView
+
+                if searchText.isEmpty && selectedCategory == "All" && !recommendedBooks.isEmpty {
+                    pickedForYouSection
+                }
                 
                 featuredBooksGrid
                     .padding(.horizontal)
@@ -67,7 +72,7 @@ struct StoreView: View {
             .frame(maxWidth: DS.Layout.maxSplitWidth)
             .frame(maxWidth: .infinity)
         }
-        .searchable(text: $searchText, prompt: "Search titles, authors, genres")
+        .searchable(text: $searchText, prompt: "Search titles, authors, genres, concepts")
         .sheet(item: $selectedBookForDetails) { book in
             StoreBookDetailSheet(storeBook: book) {
                 handlePurchase(book)
@@ -122,22 +127,64 @@ struct StoreView: View {
                         .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                
-                if !storeService.isWhisperPlusSubscribed {
-                    Text("$9.99/mo thereafter. Cancel anytime.")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
             }
             .padding(.top, 4)
         }
         .padding(DS.Spacing.lg)
         .background(DS.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
+            RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
                 .stroke(DS.Colors.border, lineWidth: 1)
         )
+    }
+
+    private var pickedForYouSection: some View {
+        VStack(alignment: .leading, spacing: DS.Spacing.sm) {
+            HStack {
+                Label("Picked For You", systemImage: "sparkles")
+                    .font(.headline.weight(.semibold))
+                    .foregroundColor(.primary)
+                Spacer()
+                Text("TypeSafe Taste Match")
+                    .font(.caption2.bold())
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal)
+            
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: DS.Spacing.md) {
+                    ForEach(recommendedBooks) { book in
+                        Button(action: { selectedBookForDetails = book }) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
+                                    .fill(DS.Colors.cardBackground)
+                                    .frame(width: 100, height: 140)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
+                                            .stroke(DS.Colors.border, lineWidth: 1)
+                                    )
+                                    .overlay {
+                                        Image(systemName: "book.pages")
+                                            .foregroundColor(.secondary)
+                                    }
+                                Text(book.title)
+                                    .font(.caption.bold())
+                                    .foregroundColor(.primary)
+                                    .lineLimit(1)
+                                Text(book.author)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                            }
+                            .frame(width: 100)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal)
+            }
+        }
     }
     
     private var categoryChipsView: some View {
@@ -188,65 +235,70 @@ struct StoreView: View {
         
         return LazyVGrid(columns: columns, spacing: DS.Spacing.xxl) {
             ForEach(filteredCatalog) { book in
-                Button(action: { selectedBookForDetails = book }) {
-                    StoreBookCard(
-                        book: book,
-                        isAlreadyOwned: isBookOwned(book),
-                        isWhisperPlusActive: storeService.isWhisperPlusSubscribed
-                    ) {
+                StoreBookItemView(
+                    book: book,
+                    isWhisperPlusActive: storeService.isWhisperPlusSubscribed,
+                    isAlreadyOwned: existingBooks.contains { $0.title.lowercased() == book.title.lowercased() },
+                    onSelect: {
+                        selectedBookForDetails = book
+                    },
+                    onBuyOrAdd: {
                         handlePurchase(book)
                     }
-                }
-                .buttonStyle(.plain)
+                )
             }
         }
     }
     
-    private func isBookOwned(_ storeBook: StoreBook) -> Bool {
-        storeService.isPurchased(id: storeBook.id) || existingBooks.contains(where: { $0.title == storeBook.title })
-    }
-    
-    private func handlePurchase(_ storeBook: StoreBook) {
-        _ = storeService.purchaseOrDownload(storeBook, context: modelContext)
-        purchasedBookTitle = storeBook.title
+    private func handlePurchase(_ book: StoreBook) {
+        let purchased = storeService.purchaseOrDownload(book, context: modelContext)
+        BookService.shared.indexBookInSpotlight(purchased)
+        purchasedBookTitle = book.title
         showPurchasedAlert = true
     }
 }
 
-// MARK: - Store Book Card Component (Flat, Minimal)
-struct StoreBookCard: View {
+// MARK: - Store Book Item View
+private struct StoreBookItemView: View {
     let book: StoreBook
-    let isAlreadyOwned: Bool
     let isWhisperPlusActive: Bool
+    let isAlreadyOwned: Bool
+    let onSelect: () -> Void
     let onBuyOrAdd: () -> Void
     
+    @State private var isHovered = false
+    
     var body: some View {
-        VStack(alignment: .leading, spacing: DS.Spacing.xs) {
-            // Flat Cover Representation
+        VStack(alignment: .leading, spacing: DS.Spacing.sm) {
+            // Flat Cover
             ZStack(alignment: .topTrailing) {
                 RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
                     .fill(DS.Colors.cardBackground)
-                    .aspectRatio(2/3, contentMode: .fill)
+                    .aspectRatio(0.68, contentMode: .fit)
                     .overlay(
                         RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
                             .stroke(DS.Colors.border, lineWidth: 1)
                     )
                     .overlay {
-                        VStack(spacing: 6) {
-                            Image(systemName: "book.pages.fill")
-                                .font(.title2)
-                                .foregroundColor(DS.Colors.accent)
+                        VStack(spacing: 8) {
+                            Image(systemName: "book.closed")
+                                .font(.system(size: 28))
+                                .foregroundColor(.secondary)
                             Text(book.title)
-                                .font(.system(size: 11, weight: .bold, design: .serif))
+                                .font(.caption.bold())
                                 .foregroundColor(.primary)
                                 .multilineTextAlignment(.center)
-                                .lineLimit(3)
-                                .padding(.horizontal, 6)
+                                .lineLimit(2)
+                                .padding(.horizontal, 8)
                         }
                     }
+                    .onTapGesture {
+                        onSelect()
+                    }
                 
+                // Format badge
                 Text(book.format.rawValue.uppercased())
-                    .font(.system(size: 8, weight: .bold))
+                    .font(.system(size: 9, weight: .bold))
                     .foregroundColor(.secondary)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 2)
@@ -312,7 +364,7 @@ struct StoreBookCard: View {
 }
 
 // MARK: - Store Book Detail Sheet
-struct StoreBookDetailSheet: View {
+private struct StoreBookDetailSheet: View {
     let storeBook: StoreBook
     let onPurchase: () -> Void
     @Environment(\.dismiss) private var dismiss

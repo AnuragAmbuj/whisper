@@ -15,6 +15,7 @@ struct ReaderView: View {
 
   @State private var showSettings = false
   @State private var showBookmarks = false
+  @State private var showSmartFind = false
 
   @State private var pageIndex: Int = 0  // For PDF/Comic
   @State private var totalPages: Int = 1
@@ -112,6 +113,12 @@ struct ReaderView: View {
 
         ToolbarItem(placement: .topBarTrailing) {
           HStack(spacing: DS.Spacing.lg) {
+            Button(action: { showSmartFind = true }) {
+              Image(systemName: "sparkle.magnifyingglass")
+              .foregroundColor(viewModel.theme.textColor.opacity(0.85))
+            }
+            .help("Smart Find (TypeSafe AI)")
+
             Button(action: { showBookmarks = true }) {
               Image(systemName: "list.bullet")
               .foregroundColor(viewModel.theme.textColor.opacity(0.85))
@@ -137,6 +144,11 @@ struct ReaderView: View {
               Image(systemName: "xmark.circle")
             }
             Divider()
+            Button(action: { showSmartFind = true }) {
+              Image(systemName: "sparkle.magnifyingglass")
+            }
+            .help("Smart Find (TypeSafe AI)")
+
             Button(action: { showBookmarks = true }) {
               Image(systemName: "list.bullet")
             }
@@ -159,6 +171,9 @@ struct ReaderView: View {
         pageIndex = bookmark.pageOrLocation
         viewModel.updateLocation(bookmark.pageOrLocation)
       }
+    }
+    .sheet(isPresented: $showSmartFind) {
+      SmartFindSheet(book: viewModel.book, theme: viewModel.theme)
     }
     .onDisappear {
       try? modelContext.save()
