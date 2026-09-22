@@ -16,6 +16,7 @@ struct ReaderView: View {
   @State private var showSettings = false
   @State private var showBookmarks = false
   @State private var showSmartFind = false
+  @State private var showControls = true
 
   @State private var pageIndex: Int = 0  // For PDF/Comic
   @State private var totalPages: Int = 1
@@ -30,8 +31,12 @@ struct ReaderView: View {
       switch viewModel.book.format ?? .text {
       case .text:
         TextReaderView(
-          book: viewModel.book, theme: viewModel.theme,
-          fontSize: viewModel.fontSize, lineHeight: viewModel.lineHeight)
+          book: viewModel.book,
+          theme: viewModel.theme,
+          fontSize: viewModel.fontSize,
+          lineHeight: viewModel.lineHeight,
+          showControls: $showControls
+        )
 
       case .pdf:
         if let url = viewModel.book.url {
@@ -46,6 +51,13 @@ struct ReaderView: View {
             let prog = totalPages > 1 ? Double(newValue) / Double(totalPages - 1) : 1.0
             viewModel.updateProgress(prog)
           }
+          .simultaneousGesture(
+            TapGesture().onEnded {
+              withAnimation(.easeInOut(duration: 0.22)) {
+                showControls.toggle()
+              }
+            }
+          )
         } else {
           ContentUnavailableView("PDF Not Found", systemImage: "doc.text")
         }
@@ -55,7 +67,8 @@ struct ReaderView: View {
           bookDir: viewModel.book.bookDir,
           mockImages: viewModel.book.sampleImages,
           currentPage: $pageIndex,
-          totalPages: $totalPages
+          totalPages: $totalPages,
+          showControls: $showControls
         )
         .onAppear {
           pageIndex = viewModel.currentLocation
@@ -73,6 +86,7 @@ struct ReaderView: View {
             theme: viewModel.theme,
             fontSize: viewModel.fontSize,
             bookTitle: viewModel.book.title,
+            showControls: $showControls,
             onProgressChanged: { progress in
               viewModel.updateProgress(progress)
             }
@@ -81,6 +95,120 @@ struct ReaderView: View {
           ContentUnavailableView("EPUB Not Found", systemImage: "book.closed")
         }
       }
+
+      // Top Navigation HUD (iOS)
+      #if os(iOS)
+      if showControls {
+        VStack(spacing: 0) {
+          HStack(alignment: .center) {
+            // Dismiss / Close Button
+            Button(action: { dismiss() }) {
+              Image(systemName: "xmark")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundColor(viewModel.theme.textColor)
+                .frame(width: 38, height: 38)
+                .background(.ultraThinMaterial)
+                .clipShape(Circle())
+                .overlay(
+                  Circle()
+                    .stroke(viewModel.theme.textColor.opacity(0.12), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            // Book Title
+            Text(viewModel.book.title)
+              .font(.subheadline.weight(.semibold))
+              .foregroundColor(viewModel.theme.textColor.opacity(0.85))
+              .lineLimit(1)
+              .truncationMode(.tail)
+              .padding(.horizontal, DS.Spacing.sm)
+
+            Spacer()
+
+            // Trailing Actions
+            HStack(spacing: DS.Spacing.sm) {
+              Button(action: { showSmartFind = true }) {
+                Image(systemName: "sparkle.magnifyingglass")
+                  .font(.system(size: 14, weight: .semibold))
+                  .foregroundColor(viewModel.theme.textColor)
+                  .frame(width: 38, height: 38)
+                  .background(.ultraThinMaterial)
+                  .clipShape(Circle())
+                  .overlay(
+                    Circle()
+                      .stroke(viewModel.theme.textColor.opacity(0.12), lineWidth: 1)
+                  )
+              }
+              .buttonStyle(.plain)
+
+              Button(action: { showBookmarks = true }) {
+                Image(systemName: "list.bullet")
+                  .font(.system(size: 14, weight: .semibold))
+                  .foregroundColor(viewModel.theme.textColor)
+                  .frame(width: 38, height: 38)
+                  .background(.ultraThinMaterial)
+                  .clipShape(Circle())
+                  .overlay(
+                    Circle()
+                      .stroke(viewModel.theme.textColor.opacity(0.12), lineWidth: 1)
+                  )
+              }
+              .buttonStyle(.plain)
+
+              Button(action: { viewModel.toggleBookmark() }) {
+                Image(systemName: viewModel.isBookmarked ? "bookmark.fill" : "bookmark")
+                  .font(.system(size: 14, weight: .semibold))
+                  .foregroundColor(viewModel.isBookmarked ? .yellow : viewModel.theme.textColor)
+                  .frame(width: 38, height: 38)
+                  .background(.ultraThinMaterial)
+                  .clipShape(Circle())
+                  .overlay(
+                    Circle()
+                      .stroke(viewModel.theme.textColor.opacity(0.12), lineWidth: 1)
+                  )
+              }
+              .buttonStyle(.plain)
+
+              Button(action: {
+                withAnimation(.easeInOut(duration: DS.Animation.normal)) { showSettings.toggle() }
+              }) {
+                Image(systemName: "textformat.size")
+                  .font(.system(size: 14, weight: .semibold))
+                  .foregroundColor(viewModel.theme.textColor)
+                  .frame(width: 38, height: 38)
+                  .background(.ultraThinMaterial)
+                  .clipShape(Circle())
+                  .overlay(
+                    Circle()
+                      .stroke(viewModel.theme.textColor.opacity(0.12), lineWidth: 1)
+                  )
+              }
+              .buttonStyle(.plain)
+            }
+          }
+          .padding(.horizontal, DS.Spacing.lg)
+          .padding(.vertical, DS.Spacing.xs)
+          .background(
+            LinearGradient(
+              colors: [
+                viewModel.theme.backgroundColor.opacity(0.92),
+                viewModel.theme.backgroundColor.opacity(0.0)
+              ],
+              startPoint: .top,
+              endPoint: .bottom
+            )
+            .ignoresSafeArea(edges: .top)
+          )
+
+          Spacer()
+        }
+        .transition(.move(edge: .top).combined(with: .opacity))
+        .zIndex(10)
+      }
+      #endif
 
       if showSettings {
         Color.black.opacity(0.4)
@@ -95,47 +223,12 @@ struct ReaderView: View {
             .transition(.move(edge: .bottom).combined(with: .opacity))
             .padding(.bottom, DS.Spacing.xl)
         }
-        .zIndex(2)
+        .zIndex(20)
       }
     }
     #if os(iOS)
       .navigationBarBackButtonHidden(true)
-      .toolbarBackground(.hidden, for: .navigationBar)
-      .toolbar {
-        ToolbarItem(placement: .topBarLeading) {
-          Button(action: { dismiss() }) {
-            Image(systemName: "xmark.circle.fill")
-            .symbolRenderingMode(.hierarchical)
-            .foregroundColor(viewModel.theme.textColor.opacity(0.85))
-            .font(.title2)
-          }
-        }
-
-        ToolbarItem(placement: .topBarTrailing) {
-          HStack(spacing: DS.Spacing.lg) {
-            Button(action: { showSmartFind = true }) {
-              Image(systemName: "sparkle.magnifyingglass")
-              .foregroundColor(viewModel.theme.textColor.opacity(0.85))
-            }
-            .help("Smart Find (TypeSafe AI)")
-
-            Button(action: { showBookmarks = true }) {
-              Image(systemName: "list.bullet")
-              .foregroundColor(viewModel.theme.textColor.opacity(0.85))
-            }
-            Button(action: { viewModel.toggleBookmark() }) {
-              Image(systemName: viewModel.isBookmarked ? "bookmark.fill" : "bookmark")
-              .foregroundColor(viewModel.isBookmarked ? .yellow : viewModel.theme.textColor.opacity(0.85))
-            }
-            Button(action: {
-              withAnimation(.easeInOut(duration: DS.Animation.normal)) { showSettings.toggle() }
-            }) {
-              Image(systemName: "textformat.size")
-              .foregroundColor(viewModel.theme.textColor.opacity(0.85))
-            }
-          }
-        }
-      }
+      .toolbar(.hidden, for: .navigationBar)
     #else
       .toolbar {
         ToolbarItem(placement: .navigation) {
@@ -154,7 +247,7 @@ struct ReaderView: View {
             }
             Button(action: { viewModel.toggleBookmark() }) {
               Image(systemName: viewModel.isBookmarked ? "bookmark.fill" : "bookmark")
-              .foregroundColor(viewModel.isBookmarked ? .yellow : .white)
+                .foregroundColor(viewModel.isBookmarked ? .yellow : .white)
             }
             Button(action: {
               withAnimation(.easeInOut(duration: DS.Animation.normal)) { showSettings.toggle() }
@@ -179,7 +272,6 @@ struct ReaderView: View {
       try? modelContext.save()
     }
   }
-
 }
 
 #Preview {

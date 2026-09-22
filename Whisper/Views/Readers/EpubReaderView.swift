@@ -63,6 +63,7 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
   var onProgressUpdated: ((Double) -> Void)?
   var onChapterChanged: ((Int) -> Void)?
   var onTapRecognized: (() -> Void)?
+  var onScrollStarted: (() -> Void)?
 
   private var cachedTheme: AppTheme = .default
   private var cachedFontSize: Double = 19.0
@@ -97,6 +98,9 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
     let contentController = webView.configuration.userContentController
     contentController.removeScriptMessageHandler(forName: "whisperTap")
     contentController.add(WeakScriptMessageHandler(delegate: self), name: "whisperTap")
+
+    contentController.removeScriptMessageHandler(forName: "whisperScrollStarted")
+    contentController.add(WeakScriptMessageHandler(delegate: self), name: "whisperScrollStarted")
 
     contentController.removeScriptMessageHandler(forName: "whisperProgress")
     contentController.add(WeakScriptMessageHandler(delegate: self), name: "whisperProgress")
@@ -245,6 +249,8 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
     Task { @MainActor in
       if message.name == "whisperTap" {
         self.onTapRecognized?()
+      } else if message.name == "whisperScrollStarted" {
+        self.onScrollStarted?()
       } else if message.name == "whisperProgress" {
         if let body = message.body as? [String: Any],
            let progress = body["progress"] as? Double {
@@ -395,9 +401,9 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
             overflow-wrap: break-word !important;
             -webkit-font-smoothing: antialiased;
             \(isPaged ?
-              "height: calc(100vh - 100px) !important; width: 100vw !important; padding: 24px 24px 70px 24px !important; column-width: calc(100vw - 48px) !important; column-gap: 48px !important; column-fill: auto !important; overflow-x: scroll !important; overflow-y: hidden !important; scrollbar-width: none !important; -webkit-overflow-scrolling: touch !important;"
+              "height: calc(100vh - 100px) !important; width: 100vw !important; padding: max(74px, calc(env(safe-area-inset-top, 20px) + 54px)) 24px 70px 24px !important; column-width: calc(100vw - 48px) !important; column-gap: 48px !important; column-fill: auto !important; overflow-x: scroll !important; overflow-y: hidden !important; scrollbar-width: none !important; -webkit-overflow-scrolling: touch !important;"
               :
-              "max-width: 720px !important; margin: 0 auto !important; padding: max(28px, env(safe-area-inset-top, 28px)) max(20px, env(safe-area-inset-right, 20px)) max(150px, env(safe-area-inset-bottom, 150px)) max(20px, env(safe-area-inset-left, 20px)) !important; overflow-x: hidden !important;"
+              "max-width: 720px !important; margin: 0 auto !important; padding: max(74px, calc(env(safe-area-inset-top, 20px) + 54px)) max(20px, env(safe-area-inset-right, 20px)) max(150px, env(safe-area-inset-bottom, 150px)) max(20px, env(safe-area-inset-left, 20px)) !important; overflow-x: hidden !important;"
             )
           }
 
@@ -545,13 +551,28 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
             }
           });
 
-          // Scroll percentage tracking
+          // Touch move detection for instant scroll start response
+          document.addEventListener('touchmove', function() {
+            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.whisperScrollStarted) {
+              window.webkit.messageHandlers.whisperScrollStarted.postMessage({});
+            }
+          }, { passive: true });
+
+          // Scroll percentage and continuous scroll tracking
+          var lastReportedScrollY = window.scrollY || window.pageYOffset || 0;
           window.addEventListener('scroll', function() {
             var docH = (document.documentElement.scrollHeight || document.body.scrollHeight) - window.innerHeight;
             var scrolled = window.scrollY || window.pageYOffset || 0;
             var progress = docH > 0 ? Math.min(1.0, Math.max(0.0, scrolled / docH)) : 0.0;
             if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.whisperProgress) {
               window.webkit.messageHandlers.whisperProgress.postMessage({ progress: progress });
+            }
+
+            if (Math.abs(scrolled - lastReportedScrollY) > 6) {
+              lastReportedScrollY = scrolled;
+              if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.whisperScrollStarted) {
+                window.webkit.messageHandlers.whisperScrollStarted.postMessage({});
+              }
             }
           }, { passive: true });
 
@@ -914,25 +935,27 @@ struct EpubReaderView: View {
   let theme: AppTheme
   let fontSize: Double
   var bookTitle: String = ""
+  @Binding var showControls: Bool
   var onProgressChanged: ((Double) -> Void)? = nil
 
   @StateObject private var controller: EpubReaderController
   @State private var chapterPaths: [String] = []
   @State private var currentChapterIndex: Int = 0
   @State private var isShowingTOC: Bool = false
-  @State private var showHUD: Bool = true
 
   init(
     bookDir: URL,
     theme: AppTheme = .default,
     fontSize: Double = 19.0,
     bookTitle: String = "",
+    showControls: Binding<Bool> = .constant(true),
     onProgressChanged: ((Double) -> Void)? = nil
   ) {
     self.bookDir = bookDir
     self.theme = theme
     self.fontSize = fontSize
     self.bookTitle = bookTitle
+    self._showControls = showControls
     self.onProgressChanged = onProgressChanged
     _controller = StateObject(wrappedValue: EpubReaderController(bookDir: bookDir, initialMode: .scroll))
   }
@@ -999,7 +1022,7 @@ struct EpubReaderView: View {
       }
 
       // HUD Bottom Navigation Pill
-      if showHUD && !controller.isLoading && !chapterPaths.isEmpty {
+      if showControls && !controller.isLoading && !chapterPaths.isEmpty {
         VStack(spacing: 0) {
           Spacer()
 
@@ -1129,8 +1152,16 @@ struct EpubReaderView: View {
     controller.attach(webView: webView)
 
     controller.onTapRecognized = {
-      withAnimation(.easeInOut(duration: 0.2)) {
-        self.showHUD.toggle()
+      withAnimation(.easeInOut(duration: 0.22)) {
+        self.showControls.toggle()
+      }
+    }
+
+    controller.onScrollStarted = {
+      if self.showControls {
+        withAnimation(.easeInOut(duration: 0.22)) {
+          self.showControls = false
+        }
       }
     }
 

@@ -12,12 +12,14 @@ struct TextReaderView: View {
     let theme: AppTheme
     let fontSize: Double
     let lineHeight: CGFloat
+    @Binding var showControls: Bool
     
-    init(book: Book, theme: AppTheme, fontSize: Double, lineHeight: CGFloat) {
+    init(book: Book, theme: AppTheme, fontSize: Double, lineHeight: CGFloat, showControls: Binding<Bool> = .constant(true)) {
         self.book = book
         self.theme = theme
         self.fontSize = fontSize
         self.lineHeight = lineHeight
+        self._showControls = showControls
     }
     
     private var titleFont: Font {
@@ -57,7 +59,7 @@ struct TextReaderView: View {
                     .font(titleFont)
                     .foregroundColor(theme.textColor)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, DS.Spacing.xl)
+                    .padding(.top, max(68, DS.Spacing.xxl))
                 
                 if !book.author.isEmpty {
                     Text(book.author)
@@ -78,6 +80,13 @@ struct TextReaderView: View {
             .frame(maxWidth: .infinity)
             .pinchToZoom(minScale: 0.85, maxScale: 3.0, doubleTapScale: 1.8)
         }
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    showControls.toggle()
+                }
+            }
+        )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.backgroundColor)
         .animation(.easeInOut(duration: 0.25), value: theme.style)

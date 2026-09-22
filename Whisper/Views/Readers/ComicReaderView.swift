@@ -38,12 +38,26 @@ struct ComicReaderView: View {
     var mockImages: [String] = []
     @Binding var currentPage: Int
     @Binding var totalPages: Int
+    @Binding var showControls: Bool
     
     @State private var pageURLs: [URL] = []
     @State private var readingMode: ComicReadingMode = .paged
     @State private var enableFocalHighlight: Bool = true
-    @State private var showControls = true
     @State private var isLoading = true
+
+    init(
+        bookDir: URL?,
+        mockImages: [String] = [],
+        currentPage: Binding<Int>,
+        totalPages: Binding<Int>,
+        showControls: Binding<Bool> = .constant(true)
+    ) {
+        self.bookDir = bookDir
+        self.mockImages = mockImages
+        self._currentPage = currentPage
+        self._totalPages = totalPages
+        self._showControls = showControls
+    }
     
     private var pages: [ComicPageSource] {
         if !pageURLs.isEmpty {
