@@ -17,12 +17,38 @@ struct SmartFindSheet: View {
   @State private var searchResult: TypeSafeService.SemanticFindResult? = nil
   @State private var isSearching: Bool = false
 
-  private let exampleSuggestions = [
-    "First meeting",
-    "Secret revealed",
-    "Journey begins",
-    "Decisive moment"
-  ]
+  private var contextualSuggestions: [String] {
+    let titleLower = book.title.lowercased()
+    if titleLower.contains("alice") || titleLower.contains("wonderland") {
+      return [
+        "Rabbit with watch",
+        "Down the rabbit-hole",
+        "Curiouser and curiouser",
+        "Pool of tears"
+      ]
+    } else if titleLower.contains("pride") || titleLower.contains("prejudice") {
+      return [
+        "Single man of large fortune",
+        "Netherfield Park",
+        "Marriage and daughters",
+        "Mr. Bennet's reply"
+      ]
+    } else if titleLower.contains("time") {
+      return [
+        "Time machine invention",
+        "Levers for travelling",
+        "Incandescent lights",
+        "Recondite matter"
+      ]
+    } else {
+      return [
+        "First meeting",
+        "Secret revealed",
+        "Journey begins",
+        "Decisive moment"
+      ]
+    }
+  }
 
   var body: some View {
     NavigationStack {
@@ -41,8 +67,17 @@ struct SmartFindSheet: View {
         // Result Content
         if isSearching {
           Spacer()
-          ProgressView("Scanning document semantically...")
-            .foregroundColor(theme.textColor.opacity(0.8))
+          VStack(spacing: DS.Spacing.sm) {
+            ProgressView()
+              .controlSize(.large)
+              .tint(theme.textColor)
+            Text("Scanning with TypeSafe System One...")
+              .font(.subheadline.weight(.medium))
+              .foregroundColor(theme.textColor.opacity(0.8))
+            Text("Evaluating semantic passages & existence probabilities")
+              .font(.caption2)
+              .foregroundColor(theme.textColor.opacity(0.5))
+          }
           Spacer()
         } else if let result = searchResult {
           resultView(result)
@@ -112,13 +147,13 @@ struct SmartFindSheet: View {
 
   private var suggestionChips: some View {
     VStack(alignment: .leading, spacing: DS.Spacing.xs) {
-      Text("NATURAL LANGUAGE SUGGESTIONS")
+      Text("RECOMMENDED QUERIES FOR THIS BOOK")
         .font(.caption2.bold())
         .foregroundColor(theme.textColor.opacity(0.5))
 
       ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: DS.Spacing.xs) {
-          ForEach(exampleSuggestions, id: \.self) { suggestion in
+          ForEach(contextualSuggestions, id: \.self) { suggestion in
             Button(action: {
               query = suggestion
               performSearch()
@@ -141,15 +176,15 @@ struct SmartFindSheet: View {
   private var emptyPromptView: some View {
     VStack(spacing: DS.Spacing.md) {
       Spacer()
-      Image(systemName: "brain.head.profile")
+      Image(systemName: "sparkles")
         .font(.system(size: 40))
         .foregroundColor(theme.textColor.opacity(0.3))
 
-      Text("TypeSafe Semantic Search")
+      Text("TypeSafe System One")
         .font(.headline)
         .foregroundColor(theme.textColor)
 
-      Text("Search by concepts, questions, or descriptions instead of exact words.\nPowered by TypeSafe System One.")
+      Text("Vectorless semantic passage localization powered by TypeSafe AI (Jev).\nSearch by concepts, actions, or descriptions instead of exact keywords.")
         .font(.subheadline)
         .foregroundColor(theme.textColor.opacity(0.65))
         .multilineTextAlignment(.center)
@@ -170,6 +205,12 @@ struct SmartFindSheet: View {
           .font(.subheadline.bold())
           .foregroundColor(verdictColor(for: result.verdict))
 
+        if result.isLiveAI {
+          Text("• Live TypeSafe AI")
+            .font(.caption2.weight(.semibold))
+            .foregroundColor(.green)
+        }
+
         Spacer()
 
         Text("\(Int(result.existsScore * 100))% confidence")
@@ -188,7 +229,7 @@ struct SmartFindSheet: View {
       if result.matches.isEmpty {
         VStack(spacing: DS.Spacing.sm) {
           Spacer()
-          Text("No matching passages found for this query.")
+          Text("No matching passages found for this query in the document.")
             .font(.subheadline)
             .foregroundColor(theme.textColor.opacity(0.6))
           Spacer()
@@ -217,11 +258,8 @@ struct SmartFindSheet: View {
 
     isSearching = true
     Task {
-      // Allow keyboard animation to settle
-      try? await Task.sleep(nanoseconds: 150_000_000)
-
-      let documentText = book.content
-      let result = TypeSafeService.shared.semanticFind(query: query, inDocument: documentText)
+      let documentText = book.resolveSearchableContent()
+      let result = await TypeSafeService.shared.semanticFind(query: query, inDocument: documentText)
 
       await MainActor.run {
         self.searchResult = result
@@ -239,31 +277,54 @@ struct SmartFindSheet: View {
   }
 }
 
+// MARK: - Match Row Component
+
 private struct MatchRowView: View {
   let match: TypeSafeService.SemanticMatch
   let theme: AppTheme
   let onSelect: () -> Void
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      HStack {
-        Text(match.lineID)
-          .font(.caption2)
+    Button(action: onSelect) {
+      VStack(alignment: .leading, spacing: DS.Spacing.xs) {
+        HStack {
+          Text(match.lineID)
+            .font(.caption2.monospaced().bold())
+            .foregroundColor(theme.textColor.opacity(0.45))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(theme.textColor.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+
+          Spacer()
+
+          HStack(spacing: 4) {
+            Image(systemName: "sparkles")
+              .font(.caption2)
+            Text("\(match.relevancePercentage)% relevance")
+              .font(.caption2.bold())
+          }
+          .foregroundColor(relevanceColor(match.relevance))
+        }
+
+        Text(match.excerpt)
+          .font(.subheadline)
           .foregroundColor(theme.textColor)
-        Spacer()
-        Text("\(match.relevancePercentage)% match")
-          .font(.caption2)
-          .foregroundColor(theme.textColor)
+          .lineLimit(4)
+          .multilineTextAlignment(.leading)
       }
-      Text(match.excerpt)
-        .font(.body)
-        .foregroundColor(theme.textColor)
-        .lineLimit(4)
+      .padding(.vertical, 4)
     }
-    .padding(.vertical, 4)
-    .contentShape(Rectangle())
-    .onTapGesture {
-      onSelect()
+    .buttonStyle(.plain)
+  }
+
+  private func relevanceColor(_ relevance: Double) -> Color {
+    if relevance >= 0.75 {
+      return .green
+    } else if relevance >= 0.50 {
+      return .orange
+    } else {
+      return .secondary
     }
   }
 }

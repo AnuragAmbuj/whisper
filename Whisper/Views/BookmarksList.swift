@@ -142,7 +142,8 @@ struct BookmarksList: View {
     
     private func loadEntities() {
         if entities.isEmpty {
-            entities = TypeSafeService.shared.extractDramatisPersonae(from: book.content)
+            let searchableText = book.resolveSearchableContent()
+            entities = TypeSafeService.shared.extractDramatisPersonae(from: searchableText)
         }
     }
     

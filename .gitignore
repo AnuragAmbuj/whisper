@@ -31,3 +31,9 @@ fastlane/test_output
 
 # Code Injection / Previews
 .tmp_assets/
+
+# Secrets & API Keys
+**/Secrets.*
+**/*.secrets
+Secrets.plist
+Config/Secrets.swift
