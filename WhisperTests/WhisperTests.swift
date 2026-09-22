@@ -9,6 +9,7 @@ import Testing
 import Foundation
 import SwiftData
 import UniformTypeIdentifiers
+import SwiftUI
 @testable import Whisper
 
 struct WhisperTests {
@@ -393,5 +394,25 @@ struct WhisperTests {
         #expect(CloudSyncService.containerIdentifier == "iCloud.club.ironlattice.Whisper")
         #expect(!syncService.status.localizedDescription.isEmpty)
         #expect(!syncService.status.iconName.isEmpty)
+    }
+
+    @Test func testWhisperMarkShapeGeometry() async throws {
+        let shape = WhisperMarkShape()
+        let rect = CGRect(x: 0, y: 0, width: 1024, height: 1024)
+        let path = shape.path(in: rect)
+
+        #expect(!path.isEmpty)
+        let bounds = path.boundingRect
+        #expect(bounds.minX >= 90 && bounds.maxX <= 930)
+        #expect(bounds.minY >= 230 && bounds.maxY <= 795)
+    }
+
+    @Test func testWhisperMarkGradientStops() async throws {
+        let stops = WhisperMarkShape.brandGradientStops
+        #expect(stops.count == 4)
+        #expect(stops[0].location == 0.0)
+        #expect(stops[1].location == 0.33)
+        #expect(stops[2].location == 0.66)
+        #expect(stops[3].location == 1.0)
     }
 }
