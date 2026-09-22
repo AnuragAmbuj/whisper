@@ -97,6 +97,7 @@ class BookService {
             book.format = .text
             didMigrate = true
           }
+          ensureBookFilesExist(book: book)
           // Ensure existing books are indexed in Spotlight
           indexBookInSpotlight(book)
         }
@@ -106,6 +107,17 @@ class BookService {
       }
     } catch {
       print("Error checking for existing books: \(error)")
+    }
+  }
+
+  func ensureBookFilesExist(book: Book) {
+    guard let bookDir = book.bookDir else { return }
+    let fileManager = FileManager.default
+    if book.format == .epub {
+      let ch1URL = bookDir.appendingPathComponent("chapter1.html")
+      if !fileManager.fileExists(atPath: ch1URL.path) && (book.title.contains("Alice") || book.title.contains("Wonderland")) {
+        populateAliceEPUB(at: bookDir)
+      }
     }
   }
 
@@ -264,14 +276,14 @@ class BookService {
           .foregroundColor: UIColor.label,
         ]
         let body1 = """
-          Welcome to Whisper, an immersive reading environment designed with Apple's premium \
-          Liquid Glass visual hierarchy. Whisper redefines document navigation through tactile, \
+          Welcome to Whisper, an immersive reading environment designed with Apple's premium \\
+          Liquid Glass visual hierarchy. Whisper redefines document navigation through tactile, \\
           fluid gestures and adaptive ambient aesthetics.
 
           Key Features:
           • Multi-Format Support: Seamlessly read EPUB, PDF, CBZ/CBR comics, and plain text.
           • Liquid Glass UI: Dynamic background mesh adapts smoothly to your content.
-          • Continuous & Paginated Modes: Switch effortlessly between standard vertical scrolling \
+          • Continuous & Paginated Modes: Switch effortlessly between standard vertical scrolling \\
           and horizontal column pagination.
           • Tactile Gesture Controls: Pinch-to-zoom, swipe-to-turn, and responsive touch controls.
           • Smart Bookmarking: Save your favorite quotes and notes with persistent memory.
@@ -460,11 +472,7 @@ class BookService {
     )
   }
 
-  private func createSampleEPUB() -> Book {
-    let bookID = UUID()
-    let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-    let epubDir = docs.appendingPathComponent("Books").appendingPathComponent(bookID.uuidString)
-
+  func populateAliceEPUB(at epubDir: URL) {
     try? FileManager.default.createDirectory(at: epubDir, withIntermediateDirectories: true)
 
     let ch1 = """
@@ -516,6 +524,14 @@ class BookService {
     if let data = try? JSONEncoder().encode(toc) {
       try? data.write(to: epubDir.appendingPathComponent("toc.json"))
     }
+  }
+
+  private func createSampleEPUB() -> Book {
+    let bookID = UUID()
+    let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+    let epubDir = docs.appendingPathComponent("Books").appendingPathComponent(bookID.uuidString)
+
+    populateAliceEPUB(at: epubDir)
 
     return Book(
       id: bookID,

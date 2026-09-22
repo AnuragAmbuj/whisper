@@ -147,19 +147,18 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
         self.continuousHTMLContent = html
 
         let canonicalBookDir = bookDir.resolvingSymlinksInPath()
-        let readAccessDir = canonicalBookDir.deletingLastPathComponent()
 
         if let fileURL = fileURL, FileManager.default.fileExists(atPath: fileURL.path) {
           let canonicalFileURL = fileURL.resolvingSymlinksInPath()
           self.currentLoadedURL = canonicalFileURL
-          webView.loadFileURL(canonicalFileURL, allowingReadAccessTo: readAccessDir)
+          webView.loadFileURL(canonicalFileURL, allowingReadAccessTo: canonicalBookDir)
         } else if let html = html {
           // Direct HTML String fallback with canonical base URL
           webView.loadHTMLString(html, baseURL: canonicalBookDir)
         } else if let first = paths.first {
           let fallbackURL = URL(fileURLWithPath: first).resolvingSymlinksInPath()
           self.currentLoadedURL = fallbackURL
-          webView.loadFileURL(fallbackURL, allowingReadAccessTo: readAccessDir)
+          webView.loadFileURL(fallbackURL, allowingReadAccessTo: canonicalBookDir)
         } else {
           self.isLoading = false
           self.errorMessage = "Unable to generate continuous reading document."
@@ -172,7 +171,6 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
     guard let webView = webView else { return }
     let canonicalURL = url.resolvingSymlinksInPath()
     let canonicalBookDir = bookDir.resolvingSymlinksInPath()
-    let readAccessDir = canonicalBookDir.deletingLastPathComponent()
 
     currentLoadedURL = canonicalURL
     isLoading = true
@@ -189,7 +187,7 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
     }
 
     if FileManager.default.fileExists(atPath: canonicalURL.path) {
-      webView.loadFileURL(canonicalURL, allowingReadAccessTo: readAccessDir)
+      webView.loadFileURL(canonicalURL, allowingReadAccessTo: canonicalBookDir)
     } else if let data = try? Data(contentsOf: canonicalURL) {
       let content = String(decoding: data, as: UTF8.self)
       webView.loadHTMLString(content, baseURL: canonicalURL.deletingLastPathComponent())
@@ -281,8 +279,8 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
     if mode == .scroll && continuousBookURL != nil {
       if currentLoadedURL != continuousBookURL, let continuousURL = continuousBookURL {
         currentLoadedURL = continuousURL
-        let canonicalReadAccess = bookDir.resolvingSymlinksInPath().deletingLastPathComponent()
-        webView?.loadFileURL(continuousURL.resolvingSymlinksInPath(), allowingReadAccessTo: canonicalReadAccess)
+        let canonicalBookDir = bookDir.resolvingSymlinksInPath()
+        webView?.loadFileURL(continuousURL.resolvingSymlinksInPath(), allowingReadAccessTo: canonicalBookDir)
         return
       }
     }
@@ -1145,7 +1143,11 @@ struct EpubReaderView: View {
     }
 
     Task {
-      let paths = await resolveChapterPaths(bookDir: bookDir)
+      var paths = await resolveChapterPaths(bookDir: bookDir)
+      if paths.isEmpty && (bookTitle.contains("Alice") || bookTitle.contains("Wonderland")) {
+        BookService.shared.populateAliceEPUB(at: bookDir)
+        paths = await resolveChapterPaths(bookDir: bookDir)
+      }
       await MainActor.run {
         self.chapterPaths = paths
         if !paths.isEmpty {
@@ -1201,7 +1203,7 @@ struct EpubReaderView: View {
           if fileManager.fileExists(atPath: altURL.path) {
             return altURL.path
           }
-          return url.path
+          return nil
         }
         if !fullPaths.isEmpty {
           return fullPaths

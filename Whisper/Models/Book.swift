@@ -49,7 +49,7 @@ final class Book {
       return path
     }
     
-    return url ?? path
+    return path
   }
 
   init(
@@ -118,6 +118,15 @@ enum BookFormat: String, Codable {
     case .pdf: return "PDF Document"
     case .comic: return "Comic Book"
     case .epub: return "EPUB Book"
+    }
+  }
+
+  var iconName: String {
+    switch self {
+    case .text: return "doc.text"
+    case .pdf: return "doc.richtext"
+    case .comic: return "photo.on.rectangle.angled"
+    case .epub: return "book"
     }
   }
 }

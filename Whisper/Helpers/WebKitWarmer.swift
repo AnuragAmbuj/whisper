@@ -11,40 +11,20 @@ import WebKit
 final class WebKitWarmer {
   static let shared = WebKitWarmer()
 
-  private var warmedWebView: WKWebView?
-  private var isWarmed = false
-
   private init() {}
 
   func prewarm() {
-    guard !isWarmed else { return }
-    isWarmed = true
-
-    let config = WKWebViewConfiguration()
-    config.preferences.isTextInteractionEnabled = true
-    config.defaultWebpagePreferences.allowsContentJavaScript = true
-
-    let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: config)
-    webView.loadHTMLString("<html><body></body></html>", baseURL: nil)
-
-    warmedWebView = webView
-
-    print("WebKit: Pre-warming complete")
+    // No-op: Offscreen unattached webviews trigger IdleExit process terminations
+    // and sandbox extension failures on modern iOS.
   }
 
   func createWebView(allowFileAccess: Bool = false) -> WKWebView {
-    let webView: WKWebView
+    let config = WKWebViewConfiguration()
+    config.preferences.isTextInteractionEnabled = true
+    config.defaultWebpagePreferences.allowsContentJavaScript = true
+    config.suppressesIncrementalRendering = false
 
-    if let warmed = warmedWebView {
-      warmedWebView = nil
-      webView = warmed
-    } else {
-      let config = WKWebViewConfiguration()
-      config.preferences.isTextInteractionEnabled = true
-      config.defaultWebpagePreferences.allowsContentJavaScript = true
-      config.suppressesIncrementalRendering = false
-      webView = WKWebView(frame: .zero, configuration: config)
-    }
+    let webView = WKWebView(frame: .zero, configuration: config)
 
     #if os(iOS)
       webView.isOpaque = false
