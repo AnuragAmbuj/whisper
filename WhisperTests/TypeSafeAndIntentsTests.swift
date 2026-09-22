@@ -160,4 +160,37 @@ struct TypeSafeAndIntentsTests {
         let service = CloudSyncService.shared
         #expect(service.status == .available || service.status == .checking || service.status == .noAccount)
     }
+
+    @Test @MainActor func testContinuousEpubDocumentConfiguration() async throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let textDir = tempDir.appendingPathComponent("OEBPS/Text", isDirectory: true)
+        try FileManager.default.createDirectory(at: textDir, withIntermediateDirectories: true)
+
+        let ch1URL = textDir.appendingPathComponent("ch1.xhtml")
+        let ch2URL = textDir.appendingPathComponent("ch2.xhtml")
+
+        let ch1Content = "<html><head><title>Ch 1</title></head><body><p>Hello world 1</p></body></html>"
+        let ch2Content = "<html><head><title>Ch 2</title></head><body><p>Hello world 2</p></body></html>"
+
+        try ch1Content.write(to: ch1URL, atomically: true, encoding: .utf8)
+        try ch2Content.write(to: ch2URL, atomically: true, encoding: .utf8)
+
+        let controller = EpubReaderController(bookDir: tempDir)
+        controller.configureBook(
+            chapterPaths: [ch1URL.path, ch2URL.path],
+            bookTitle: "Test Multi-Chapter Book",
+            theme: .default,
+            fontSize: 18.0
+        )
+
+        #expect(controller.totalChapters == 2)
+        #expect(controller.currentChapterIndex == 0)
+        #expect(controller.readingMode == .paginated)
+
+        controller.setReadingMode(.scroll)
+        #expect(controller.readingMode == .scroll)
+    }
 }
