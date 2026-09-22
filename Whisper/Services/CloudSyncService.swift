@@ -9,6 +9,9 @@ import Foundation
 import CloudKit
 import Combine
 import SwiftData
+#if canImport(Darwin)
+import Darwin
+#endif
 #if os(macOS)
 import Security
 #endif
@@ -70,20 +73,32 @@ final class CloudSyncService: ObservableObject {
     
     /// Verifies whether the process possesses active CloudKit entitlements before touching CKContainer
     static var isCloudKitEntitled: Bool {
-        #if os(macOS)
-        guard let task = SecTaskCreateFromSelf(nil) else { return false }
-        guard let value = SecTaskCopyValueForEntitlement(task, "com.apple.developer.icloud-services" as CFString, nil) else {
-            return false
+        // 1. Dynamic SecTask entitlement query (macOS, iOS device, and simulator)
+        typealias SecTaskCreateFromSelfFunc = @convention(c) (CFAllocator?) -> AnyObject?
+        typealias SecTaskCopyValueForEntitlementFunc = @convention(c) (AnyObject, CFString, UnsafeMutablePointer<Unmanaged<CFError>?>?) -> AnyObject?
+        
+        let handle = dlopen(nil, RTLD_NOW)
+        if let createSym = dlsym(handle, "SecTaskCreateFromSelf"),
+           let copySym = dlsym(handle, "SecTaskCopyValueForEntitlement") {
+            let createFunc = unsafeBitCast(createSym, to: SecTaskCreateFromSelfFunc.self)
+            let copyFunc = unsafeBitCast(copySym, to: SecTaskCopyValueForEntitlementFunc.self)
+            if let task = createFunc(nil) {
+                let value = copyFunc(task, "com.apple.developer.icloud-services" as CFString, nil)
+                if let array = value as? [String] {
+                    return array.contains("CloudKit") || array.contains("CloudKit-Anonymous")
+                }
+            }
         }
-        if let array = value as? [String] {
-            return array.contains("CloudKit") || array.contains("CloudKit-Anonymous")
+        
+        // 2. On physical iOS devices, inspect embedded.mobileprovision for explicit CloudKit capability
+        if let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
+           let data = try? Data(contentsOf: url),
+           let string = String(data: data, encoding: .ascii) {
+            return string.contains("com.apple.developer.icloud-services") &&
+                   (string.contains("CloudKit") || string.contains("CloudKit-Anonymous"))
         }
+        
         return false
-        #elseif targetEnvironment(simulator)
-        return FileManager.default.ubiquityIdentityToken != nil
-        #else
-        return FileManager.default.ubiquityIdentityToken != nil
-        #endif
     }
     
     private lazy var container: CKContainer? = {
