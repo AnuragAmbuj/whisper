@@ -49,7 +49,7 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
   @Published var currentChapterIndex: Int = 0
   @Published var totalChapters: Int = 1
   @Published var scrollPercentage: Double = 0.0
-  @Published var readingMode: EpubReadingMode = .paginated
+  @Published var readingMode: EpubReadingMode
   @Published var errorMessage: String? = nil
 
   var webView: WKWebView?
@@ -57,6 +57,7 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
   private var currentLoadedURL: URL?
   private var chapterPaths: [String] = []
   private var continuousBookURL: URL?
+  private var continuousHTMLContent: String?
   private var watchdogTask: Task<Void, Never>?
 
   var onProgressUpdated: ((Double) -> Void)?
@@ -66,14 +67,32 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
   private var cachedTheme: AppTheme = .default
   private var cachedFontSize: Double = 19.0
 
-  init(bookDir: URL) {
+  init(bookDir: URL, initialMode: EpubReadingMode = .paginated) {
     self.bookDir = bookDir
+    self.readingMode = initialMode
     super.init()
   }
 
   func attach(webView: WKWebView) {
     self.webView = webView
     webView.navigationDelegate = self
+
+    #if os(iOS)
+      webView.isOpaque = false
+      webView.backgroundColor = .clear
+      webView.scrollView.backgroundColor = .clear
+      webView.scrollView.bounces = true
+      webView.scrollView.alwaysBounceVertical = (readingMode == .scroll)
+      webView.scrollView.showsVerticalScrollIndicator = (readingMode == .scroll)
+      webView.scrollView.showsHorizontalScrollIndicator = false
+      webView.scrollView.minimumZoomScale = 1.0
+      webView.scrollView.maximumZoomScale = 4.0
+      webView.scrollView.isScrollEnabled = true
+      webView.isUserInteractionEnabled = true
+    #else
+      webView.setValue(false, forKey: "drawsBackground")
+      webView.allowsMagnification = true
+    #endif
 
     let contentController = webView.configuration.userContentController
     contentController.removeScriptMessageHandler(forName: "whisperTap")
@@ -84,19 +103,6 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
 
     contentController.removeScriptMessageHandler(forName: "whisperChapterChanged")
     contentController.add(WeakScriptMessageHandler(delegate: self), name: "whisperChapterChanged")
-
-    #if os(iOS)
-      webView.scrollView.bounces = true
-      webView.scrollView.alwaysBounceVertical = (readingMode == .scroll)
-      webView.scrollView.showsVerticalScrollIndicator = (readingMode == .scroll)
-      webView.scrollView.showsHorizontalScrollIndicator = false
-      webView.scrollView.minimumZoomScale = 1.0
-      webView.scrollView.maximumZoomScale = 4.0
-      webView.scrollView.isScrollEnabled = true
-      webView.isUserInteractionEnabled = true
-    #else
-      webView.allowsMagnification = true
-    #endif
   }
 
   func configureBook(chapterPaths: [String], bookTitle: String, theme: AppTheme, fontSize: Double) {
@@ -131,20 +137,29 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
     }
 
     Task.detached(priority: .userInitiated) { [bookDir = self.bookDir, paths = self.chapterPaths] in
-      let fileURL = await Self.generateContinuousDocument(
+      let (fileURL, html) = await Self.generateContinuousDocument(
         bookDir: bookDir,
         chapterPaths: paths,
         bookTitle: bookTitle
       )
       await MainActor.run {
         self.continuousBookURL = fileURL
+        self.continuousHTMLContent = html
+
+        let canonicalBookDir = bookDir.resolvingSymlinksInPath()
+        let readAccessDir = canonicalBookDir.deletingLastPathComponent()
+
         if let fileURL = fileURL, FileManager.default.fileExists(atPath: fileURL.path) {
-          self.currentLoadedURL = fileURL
-          webView.loadFileURL(fileURL, allowingReadAccessTo: bookDir)
+          let canonicalFileURL = fileURL.resolvingSymlinksInPath()
+          self.currentLoadedURL = canonicalFileURL
+          webView.loadFileURL(canonicalFileURL, allowingReadAccessTo: readAccessDir)
+        } else if let html = html {
+          // Direct HTML String fallback with canonical base URL
+          webView.loadHTMLString(html, baseURL: canonicalBookDir)
         } else if let first = paths.first {
-          let fallbackURL = URL(fileURLWithPath: first)
+          let fallbackURL = URL(fileURLWithPath: first).resolvingSymlinksInPath()
           self.currentLoadedURL = fallbackURL
-          webView.loadFileURL(fallbackURL, allowingReadAccessTo: bookDir)
+          webView.loadFileURL(fallbackURL, allowingReadAccessTo: readAccessDir)
         } else {
           self.isLoading = false
           self.errorMessage = "Unable to generate continuous reading document."
@@ -155,7 +170,11 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
 
   func loadChapter(at url: URL, theme: AppTheme, fontSize: Double) {
     guard let webView = webView else { return }
-    currentLoadedURL = url
+    let canonicalURL = url.resolvingSymlinksInPath()
+    let canonicalBookDir = bookDir.resolvingSymlinksInPath()
+    let readAccessDir = canonicalBookDir.deletingLastPathComponent()
+
+    currentLoadedURL = canonicalURL
     isLoading = true
     currentPage = 1
     totalPages = 1
@@ -169,10 +188,11 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
       self.isLoading = false
     }
 
-    if FileManager.default.fileExists(atPath: url.path) {
-      webView.loadFileURL(url, allowingReadAccessTo: bookDir)
-    } else if let content = try? String(contentsOf: url, encoding: .utf8) {
-      webView.loadHTMLString(content, baseURL: url.deletingLastPathComponent())
+    if FileManager.default.fileExists(atPath: canonicalURL.path) {
+      webView.loadFileURL(canonicalURL, allowingReadAccessTo: readAccessDir)
+    } else if let data = try? Data(contentsOf: canonicalURL) {
+      let content = String(decoding: data, as: UTF8.self)
+      webView.loadHTMLString(content, baseURL: canonicalURL.deletingLastPathComponent())
     } else {
       isLoading = false
       errorMessage = "Unable to open chapter at: \(url.lastPathComponent)"
@@ -189,11 +209,16 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
   }
 
   nonisolated func webView(
-    _ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error
+    _ webView: WKWebView, didFail navigation: WKNavigation!,
+    withError error: Error
   ) {
     Task { @MainActor in
       self.watchdogTask?.cancel()
-      self.isLoading = false
+      if let html = self.continuousHTMLContent {
+        webView.loadHTMLString(html, baseURL: self.bookDir.resolvingSymlinksInPath())
+      } else {
+        self.isLoading = false
+      }
     }
   }
 
@@ -203,7 +228,13 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
   ) {
     Task { @MainActor in
       self.watchdogTask?.cancel()
-      self.isLoading = false
+      // If provisional navigation fails (sandbox token rejection), fall back to loadHTMLString
+      if let html = self.continuousHTMLContent {
+        webView.loadHTMLString(html, baseURL: self.bookDir.resolvingSymlinksInPath())
+      } else {
+        self.isLoading = false
+        self.errorMessage = "Failed to load reader: \(error.localizedDescription)"
+      }
     }
   }
 
@@ -250,7 +281,8 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
     if mode == .scroll && continuousBookURL != nil {
       if currentLoadedURL != continuousBookURL, let continuousURL = continuousBookURL {
         currentLoadedURL = continuousURL
-        webView?.loadFileURL(continuousURL, allowingReadAccessTo: bookDir)
+        let canonicalReadAccess = bookDir.resolvingSymlinksInPath().deletingLastPathComponent()
+        webView?.loadFileURL(continuousURL.resolvingSymlinksInPath(), allowingReadAccessTo: canonicalReadAccess)
         return
       }
     }
@@ -367,7 +399,7 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
             \(isPaged ?
               "height: calc(100vh - 100px) !important; width: 100vw !important; padding: 24px 24px 70px 24px !important; column-width: calc(100vw - 48px) !important; column-gap: 48px !important; column-fill: auto !important; overflow-x: scroll !important; overflow-y: hidden !important; scrollbar-width: none !important; -webkit-overflow-scrolling: touch !important;"
               :
-              "max-width: 720px !important; margin: 0 auto !important; padding: max(24px, env(safe-area-inset-top, 24px)) max(20px, env(safe-area-inset-right, 20px)) max(140px, env(safe-area-inset-bottom, 140px)) max(20px, env(safe-area-inset-left, 20px)) !important; overflow-x: hidden !important;"
+              "max-width: 720px !important; margin: 0 auto !important; padding: max(28px, env(safe-area-inset-top, 28px)) max(20px, env(safe-area-inset-right, 20px)) max(150px, env(safe-area-inset-bottom, 150px)) max(20px, env(safe-area-inset-left, 20px)) !important; overflow-x: hidden !important;"
             )
           }
 
@@ -379,7 +411,7 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
 
           .whisper-chapter {
             margin-bottom: 56px;
-            scroll-margin-top: 40px;
+            scroll-margin-top: 60px;
           }
 
           .whisper-chapter-divider {
@@ -398,15 +430,15 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
           }
 
           .whisper-divider-pill {
-            font-size: 0.8em;
+            font-size: 0.82em;
             font-weight: 600;
-            letter-spacing: 0.08em;
+            letter-spacing: 0.06em;
             text-transform: uppercase;
             color: var(--whisper-text);
-            opacity: 0.75;
-            padding: 6px 14px;
-            border-radius: 12px;
-            border: 1px solid rgba(128, 128, 128, 0.25);
+            opacity: 0.8;
+            padding: 6px 16px;
+            border-radius: 14px;
+            border: 1px solid rgba(128, 128, 128, 0.28);
             background: var(--whisper-bg);
           }
 
@@ -458,86 +490,95 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
           table {
             max-width: 100% !important;
             border-collapse: collapse !important;
-            margin: 18px 0 !important;
+            margin: 1.5em 0 !important;
           }
-
-          a {
-            color: inherit !important;
-            text-decoration: underline !important;
+          th, td {
+            border: 1px solid var(--whisper-text);
+            opacity: 0.8;
+            padding: 8px 12px;
           }
         `;
         document.head.appendChild(style);
 
-        // 4. Install interaction listeners
-        if (!window._whisperListenersInstalled) {
-          window._whisperListenersInstalled = true;
-          var touchStartX = 0, touchStartY = 0, touchStartTime = 0;
+        // 4. Stationary Tap & Interaction Listener (non-interfering)
+        if (!window._whisperTapAttached) {
+          window._whisperTapAttached = true;
+          var touchStartX = 0;
+          var touchStartY = 0;
+          var touchStartTime = 0;
 
-          window.addEventListener('touchstart', function(e) {
-            if (e.touches.length === 1) {
+          document.addEventListener('touchstart', function(e) {
+            if (e.touches && e.touches.length === 1) {
               touchStartX = e.touches[0].clientX;
               touchStartY = e.touches[0].clientY;
               touchStartTime = Date.now();
             }
           }, { passive: true });
 
-          window.addEventListener('touchend', function(e) {
-            if (Date.now() - touchStartTime < 320) {
-              var touch = e.changedTouches[0];
-              var dx = Math.abs(touch.clientX - touchStartX);
-              var dy = Math.abs(touch.clientY - touchStartY);
-              if (dx < 10 && dy < 10) {
-                var target = e.target;
-                if (target && (target.tagName === 'A' || target.tagName === 'BUTTON' || target.closest('a'))) {
-                  return;
-                }
-                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.whisperTap) {
-                  window.webkit.messageHandlers.whisperTap.postMessage({});
-                }
+          document.addEventListener('touchend', function(e) {
+            if (!e.changedTouches || e.changedTouches.length !== 1) return;
+            var dt = Date.now() - touchStartTime;
+            var dx = Math.abs(e.changedTouches[0].clientX - touchStartX);
+            var dy = Math.abs(e.changedTouches[0].clientY - touchStartY);
+
+            // Stationary tap within 350ms and under 12px motion
+            if (dt < 350 && dx < 12 && dy < 12) {
+              var target = e.target;
+              if (target && (target.tagName === 'A' || target.closest('A'))) {
+                return; // Let hyperlink follow
+              }
+              if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.whisperTap) {
+                window.webkit.messageHandlers.whisperTap.postMessage({});
               }
             }
           }, { passive: true });
 
-          window.addEventListener('click', function(e) {
-            if (e.target && (e.target.tagName === 'A' || e.target.tagName === 'BUTTON' || e.target.closest('a'))) {
-              return;
-            }
-            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.whisperTap) {
-              window.webkit.messageHandlers.whisperTap.postMessage({});
+          // Smooth internal anchor jump
+          document.addEventListener('click', function(e) {
+            var a = e.target.closest('a');
+            if (!a) return;
+            var href = a.getAttribute('href');
+            if (href && href.startsWith('#')) {
+              var el = document.querySelector(href);
+              if (el) {
+                e.preventDefault();
+                el.scrollIntoView({ behavior: 'smooth' });
+              }
             }
           });
 
-          // Scroll progress tracking
+          // Scroll percentage tracking
           window.addEventListener('scroll', function() {
-            var scrollY = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
-            var maxScroll = Math.max(1, (document.documentElement.scrollHeight || document.body.scrollHeight || 1) - window.innerHeight);
-            var pct = Math.min(1.0, Math.max(0.0, scrollY / maxScroll));
+            var docH = (document.documentElement.scrollHeight || document.body.scrollHeight) - window.innerHeight;
+            var scrolled = window.scrollY || window.pageYOffset || 0;
+            var progress = docH > 0 ? Math.min(1.0, Math.max(0.0, scrolled / docH)) : 0.0;
             if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.whisperProgress) {
-              window.webkit.messageHandlers.whisperProgress.postMessage({ progress: pct });
+              window.webkit.messageHandlers.whisperProgress.postMessage({ progress: progress });
             }
           }, { passive: true });
 
-          // Multi-Chapter Intersection Observer
-          if ('IntersectionObserver' in window) {
-            var chapterObserver = new IntersectionObserver(function(entries) {
-              for (var i = 0; i < entries.length; i++) {
-                if (entries[i].isIntersecting) {
-                  var target = entries[i].target;
-                  var idx = parseInt(target.getAttribute('data-chapter-index'), 10);
-                  if (!isNaN(idx) && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.whisperChapterChanged) {
-                    window.webkit.messageHandlers.whisperChapterChanged.postMessage({ chapterIndex: idx });
-                  }
+          // Intersection observer for continuous chapter tracking
+          var chapterSections = document.querySelectorAll('.whisper-chapter');
+          if (chapterSections.length > 0 && 'IntersectionObserver' in window) {
+            var observer = new IntersectionObserver(function(entries) {
+              var visible = entries.filter(function(e) { return e.isIntersecting; });
+              if (visible.length > 0) {
+                visible.sort(function(a, b) {
+                  return Math.abs(a.boundingClientRect.top) - Math.abs(b.boundingClientRect.top);
+                });
+                var idx = parseInt(visible[0].target.getAttribute('data-chapter-index'), 10);
+                if (!isNaN(idx) && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.whisperChapterChanged) {
+                  window.webkit.messageHandlers.whisperChapterChanged.postMessage({ chapterIndex: idx });
                 }
               }
             }, {
-              rootMargin: '-10% 0px -70% 0px',
-              threshold: 0
+              rootMargin: '0px 0px -50% 0px',
+              threshold: [0, 0.25, 0.5]
             });
 
-            var chapters = document.querySelectorAll('.whisper-chapter');
-            for (var j = 0; j < chapters.length; j++) {
-              chapterObserver.observe(chapters[j]);
-            }
+            chapterSections.forEach(function(sec) {
+              observer.observe(sec);
+            });
           }
         }
 
@@ -577,26 +618,45 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
     bookDir: URL,
     chapterPaths: [String],
     bookTitle: String
-  ) -> URL? {
+  ) -> (URL?, String?) {
     let outputURL = bookDir.appendingPathComponent("whisper_continuous_book.html")
     let fileManager = FileManager.default
 
+    // Load table of contents mapping if available
+    var tocTitleMap: [String: String] = [:]
+    let tocURL = bookDir.appendingPathComponent("toc.json")
+    if let data = try? Data(contentsOf: tocURL),
+       let chapters = try? JSONDecoder().decode([Chapter].self, from: data) {
+      for ch in chapters {
+        let clean = (ch.path.components(separatedBy: "#").first ?? ch.path).removingPercentEncoding ?? ch.path
+        let filename = (clean as NSString).lastPathComponent
+        tocTitleMap[filename] = ch.title
+        tocTitleMap[clean] = ch.title
+      }
+    }
+
     var combinedSections: [String] = []
+    var combinedHeadStyles: [String] = []
 
     for (index, path) in chapterPaths.enumerated() {
       let fileURL = URL(fileURLWithPath: path)
-      guard let rawContent = try? String(contentsOf: fileURL, encoding: .utf8) ??
-            String(contentsOf: fileURL, encoding: .ascii) else {
-        continue
-      }
+      let fileData = (try? Data(contentsOf: fileURL)) ?? Data()
+      guard !fileData.isEmpty else { continue }
+
+      let rawContent = String(decoding: fileData, as: UTF8.self)
 
       let chapterDirRel = fileURL.deletingLastPathComponent().path
         .replacingOccurrences(of: bookDir.path, with: "")
         .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
 
-      let chapterTitle = extractTitle(from: rawContent) ?? "Chapter \(index + 1)"
+      let filename = fileURL.lastPathComponent
+      let chapterTitle = tocTitleMap[filename] ?? tocTitleMap[path] ?? extractTitle(from: rawContent) ?? "Chapter \(index + 1)"
       let bodyContent = extractBody(from: rawContent)
       let resolvedContent = rewriteRelativePaths(html: bodyContent, chapterDir: chapterDirRel)
+      let headStyles = extractHeadStyles(from: rawContent)
+      if !headStyles.isEmpty {
+        combinedHeadStyles.append(headStyles)
+      }
 
       let sectionHTML = """
       <section id="chapter-\(index)" class="whisper-chapter" data-chapter-index="\(index)" data-chapter-title="\(chapterTitle)">
@@ -615,7 +675,7 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
       combinedSections.append(sectionHTML)
     }
 
-    guard !combinedSections.isEmpty else { return nil }
+    guard !combinedSections.isEmpty else { return (nil, nil) }
 
     let fullHTML = """
     <!DOCTYPE html>
@@ -624,6 +684,7 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
       <title>\(bookTitle)</title>
+      \(combinedHeadStyles.joined(separator: "\n"))
     </head>
     <body>
       <main class="whisper-book-container">
@@ -635,10 +696,10 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
 
     do {
       try fullHTML.write(to: outputURL, atomically: true, encoding: .utf8)
-      return outputURL
+      return (outputURL, fullHTML)
     } catch {
       print("EpubReaderController: Failed to write continuous book: \(error.localizedDescription)")
-      return nil
+      return (nil, fullHTML)
     }
   }
 
@@ -649,27 +710,39 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
        let range = Range(match.range(at: 1), in: html) {
       return String(html[range])
     }
-    // Fallback: strip doctype and html tags
     return html
       .replacingOccurrences(of: "<!DOCTYPE[^>]*>", with: "", options: .regularExpression)
       .replacingOccurrences(of: "<html[^>]*>", with: "", options: .regularExpression)
       .replacingOccurrences(of: "</html>", with: "")
   }
 
+  private static func extractHeadStyles(from html: String) -> String {
+    let pattern = "(?is)<style[^>]*>(.*?)</style>"
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return "" }
+    let matches = regex.matches(in: html, range: NSRange(location: 0, length: html.utf16.count))
+    var styles: [String] = []
+    for match in matches {
+      if let range = Range(match.range, in: html) {
+        styles.append(String(html[range]))
+      }
+    }
+    return styles.joined(separator: "\n")
+  }
+
   private static func extractTitle(from html: String) -> String? {
     let patterns = [
-      "(?is)<title[^>]*>(.*?)</title>",
-      "(?is)<h[1-2][^>]*>(.*?)</h[1-2]>"
+      "(?is)<h[1-2][^>]*>(.*?)</h[1-2]>",
+      "(?is)<title[^>]*>(.*?)</title>"
     ]
     for pattern in patterns {
       if let regex = try? NSRegularExpression(pattern: pattern),
          let match = regex.firstMatch(in: html, range: NSRange(location: 0, length: html.utf16.count)),
          let range = Range(match.range(at: 1), in: html) {
-        let text = String(html[range])
-          .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        let raw = String(html[range])
+        let clean = raw.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
           .trimmingCharacters(in: .whitespacesAndNewlines)
-        if !text.isEmpty {
-          return text
+        if !clean.isEmpty && clean.count < 80 {
+          return clean
         }
       }
     }
@@ -677,6 +750,8 @@ final class EpubReaderController: NSObject, ObservableObject, WKNavigationDelega
   }
 
   private static func rewriteRelativePaths(html: String, chapterDir: String) -> String {
+    guard !chapterDir.isEmpty else { return html }
+
     let pattern = "(?i)(src|href|xlink:href)\\s*=\\s*([\"'])([^\"']+)\\2"
     guard let regex = try? NSRegularExpression(pattern: pattern) else { return html }
 
@@ -861,7 +936,7 @@ struct EpubReaderView: View {
     self.fontSize = fontSize
     self.bookTitle = bookTitle
     self.onProgressChanged = onProgressChanged
-    _controller = StateObject(wrappedValue: EpubReaderController(bookDir: bookDir))
+    _controller = StateObject(wrappedValue: EpubReaderController(bookDir: bookDir, initialMode: .scroll))
   }
 
   var body: some View {
@@ -877,11 +952,11 @@ struct EpubReaderView: View {
           .animation(.easeInOut(duration: 0.25), value: controller.isLoading)
       }
 
-      // In Paginated Mode, horizontal swipe gestures to turn pages
+      // In Paginated Mode, horizontal edge tap strips
       if controller.readingMode == .paginated {
         HStack(spacing: 0) {
           Color.clear
-            .frame(width: 80)
+            .frame(width: 60)
             .contentShape(Rectangle())
             .onTapGesture {
               controller.previousPage {
@@ -892,17 +967,10 @@ struct EpubReaderView: View {
               }
             }
 
-          Color.clear
-            .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
-            .onTapGesture {
-              withAnimation(.easeInOut(duration: 0.2)) {
-                showHUD.toggle()
-              }
-            }
+          Spacer()
 
           Color.clear
-            .frame(width: 80)
+            .frame(width: 60)
             .contentShape(Rectangle())
             .onTapGesture {
               controller.nextPage {
@@ -971,7 +1039,7 @@ struct EpubReaderView: View {
                       .foregroundColor(theme.textColor.opacity(0.7))
                   } else {
                     let pct = Int(controller.scrollPercentage * 100)
-                    Text("Continuous \u{2022} \(pct)%")
+                    Text("Continuous • \(pct)%")
                       .font(.caption2)
                       .foregroundColor(theme.textColor.opacity(0.7))
                   }

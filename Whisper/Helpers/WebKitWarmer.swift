@@ -22,6 +22,7 @@ final class WebKitWarmer {
 
     let config = WKWebViewConfiguration()
     config.preferences.isTextInteractionEnabled = true
+    config.defaultWebpagePreferences.allowsContentJavaScript = true
 
     let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: config)
     webView.loadHTMLString("<html><body></body></html>", baseURL: nil)
@@ -32,18 +33,18 @@ final class WebKitWarmer {
   }
 
   func createWebView(allowFileAccess: Bool = false) -> WKWebView {
-    let config = WKWebViewConfiguration()
-    config.preferences.isTextInteractionEnabled = true
-    config.defaultWebpagePreferences.allowsContentJavaScript = true
+    let webView: WKWebView
 
-    if allowFileAccess {
-      config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
-      config.setValue(true, forKey: "allowUniversalAccessFromFileURLs")
+    if let warmed = warmedWebView {
+      warmedWebView = nil
+      webView = warmed
+    } else {
+      let config = WKWebViewConfiguration()
+      config.preferences.isTextInteractionEnabled = true
+      config.defaultWebpagePreferences.allowsContentJavaScript = true
+      config.suppressesIncrementalRendering = false
+      webView = WKWebView(frame: .zero, configuration: config)
     }
-
-    config.suppressesIncrementalRendering = false
-
-    let webView = WKWebView(frame: .zero, configuration: config)
 
     #if os(iOS)
       webView.isOpaque = false
