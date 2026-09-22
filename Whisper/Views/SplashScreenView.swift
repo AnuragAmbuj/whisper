@@ -16,20 +16,17 @@ struct SplashScreenView: View {
                 .ignoresSafeArea()
             
             VStack(spacing: DS.Spacing.xxl) {
-                // Flat, elegant app emblem
-                ZStack {
-                    RoundedRectangle(cornerRadius: DS.Radius.xl, style: .continuous)
-                        .fill(DS.Colors.cardBackground)
-                        .frame(width: 88, height: 88)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: DS.Radius.xl, style: .continuous)
-                                .stroke(DS.Colors.border, lineWidth: 1)
-                        )
-                    
-                    Image(systemName: "book.pages.fill")
-                        .font(.system(size: 40, weight: .semibold))
-                        .foregroundColor(.primary)
-                }
+                // Whisper Mark Emblem
+                Image("WhisperLogo")
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 88, height: 88)
+                    .clipShape(RoundedRectangle(cornerRadius: DS.Radius.xl, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: DS.Radius.xl, style: .continuous)
+                            .stroke(DS.Colors.border, lineWidth: 1)
+                    )
+                    .shadow(color: Color.black.opacity(0.06), radius: 10, y: 4)
                 
                 VStack(spacing: DS.Spacing.sm) {
                     Text("Whisper")
