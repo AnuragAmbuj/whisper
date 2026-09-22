@@ -16,6 +16,7 @@ struct LibraryView: View {
   @State private var showImportError = false
   @State private var importErrorMessage: String?
   @State private var hoveredCategory: String? = nil
+  @ObservedObject private var cloudSync = CloudSyncService.shared
   @Query var books: [Book]
   @Environment(\.modelContext) private var modelContext
 
@@ -56,6 +57,9 @@ struct LibraryView: View {
           .frame(maxWidth: DS.Layout.maxSplitWidth)
           .frame(maxWidth: .infinity)
         }
+        .refreshable {
+          await cloudSync.triggerSync()
+        }
 
         if isProcessingImport {
           importingOverlay
@@ -65,10 +69,30 @@ struct LibraryView: View {
       .searchable(text: $viewModel.searchText, prompt: "Search title or author")
       .onAppear {
         loadMockData()
+        Task {
+          await cloudSync.triggerSync()
+        }
       }
       .toolbar {
         ToolbarItem(placement: .primaryAction) {
           HStack(spacing: DS.Spacing.sm) {
+            // iCloud Sync Action Button
+            Button(action: {
+              Task {
+                await cloudSync.triggerSync()
+              }
+            }) {
+              if cloudSync.isSyncing {
+                ProgressView()
+                  .controlSize(.small)
+              } else {
+                Image(systemName: cloudSync.status == .available ? "icloud.fill" : cloudSync.status.iconName)
+                  .foregroundColor(cloudSync.status == .available ? DS.Colors.accent : .secondary)
+              }
+            }
+            .disabled(cloudSync.isSyncing)
+            .help("Sync Library with iCloud")
+
             Menu {
               Button(action: resetToSampleLibrary) {
                 Label("Reload Sample Library", systemImage: "arrow.counterclockwise")
@@ -178,10 +202,7 @@ struct LibraryView: View {
         .ignoresSafeArea()
 
       VStack(spacing: 16) {
-        ProgressView()
-          .controlSize(.large)
-          .tint(.primary)
-
+        WhisperMarkLoaderView(size: 64, style: .wave)
         Text("Importing...")
           .font(.headline)
           .foregroundColor(.primary)

@@ -5,29 +5,32 @@
 //  Created by Anurag Ambuj on 29/12/25.
 //
 
+import PDFKit
 import SwiftData
 import SwiftUI
 
 struct ReaderView: View {
+  @Environment(\.dismiss) private var dismiss
+  @Environment(\.modelContext) private var modelContext
   @State var viewModel: ReaderViewModel
-  @Environment(\.dismiss) var dismiss
-  @Environment(\.modelContext) var modelContext
-
+  @State private var showControls = true
   @State private var showSettings = false
   @State private var showBookmarks = false
-  @State private var showSmartFind = false
-  @State private var showControls = true
-
-  @State private var pageIndex: Int = 0  // For PDF/Comic
+  @State private var pageIndex: Int = 0
   @State private var totalPages: Int = 1
+  @State private var showSmartFind = false
+
+  init(book: Book) {
+    _viewModel = State(wrappedValue: ReaderViewModel(book: book))
+  }
+
+  init(viewModel: ReaderViewModel) {
+    _viewModel = State(wrappedValue: viewModel)
+  }
 
   var body: some View {
     ZStack {
-      // Clean reading surface matching selected eye-comfort theme (Apple HIG compliant)
-      viewModel.theme.backgroundColor
-        .ignoresSafeArea()
-
-      // Content Area
+      // Content layer based on format
       switch viewModel.book.format ?? .text {
       case .text:
         TextReaderView(
@@ -39,7 +42,7 @@ struct ReaderView: View {
         )
 
       case .pdf:
-        if let url = viewModel.book.url {
+        if let url = viewModel.book.resolvedURL {
           ZStack {
             PDFKitView(url: url, currentPageIndex: $pageIndex, totalPages: $totalPages, theme: viewModel.theme)
           }
@@ -118,13 +121,21 @@ struct ReaderView: View {
 
             Spacer()
 
-            // Book Title
-            Text(viewModel.book.title)
-              .font(.subheadline.weight(.semibold))
-              .foregroundColor(viewModel.theme.textColor.opacity(0.85))
-              .lineLimit(1)
-              .truncationMode(.tail)
-              .padding(.horizontal, DS.Spacing.sm)
+            // Header metadata (Title & Format)
+            VStack(spacing: 2) {
+              Text(viewModel.book.title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(viewModel.theme.textColor)
+                .lineLimit(1)
+
+              if !viewModel.book.author.isEmpty {
+                Text(viewModel.book.author)
+                  .font(.caption2)
+                  .foregroundColor(viewModel.theme.textColor.opacity(0.65))
+                  .lineLimit(1)
+              }
+            }
+            .frame(maxWidth: 240)
 
             Spacer()
 

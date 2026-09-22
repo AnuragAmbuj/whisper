@@ -27,6 +27,8 @@ class ReaderViewModel {
     init(book: Book) {
         self.book = book
         self.theme = AppTheme()
+        // Apply latest reading state from iCloud if newer
+        CloudSyncService.shared.applyLatestCloudReadingProgress(for: book)
         self.currentLocation = Int(book.progress * 100)
         loadSettings()
         checkIfBookmarked()
@@ -66,6 +68,7 @@ class ReaderViewModel {
     func updateProgress(_ newProgress: Double) {
         book.progress = min(max(newProgress, 0.0), 1.0)
         book.lastReadDate = Date()
+        CloudSyncService.shared.saveReadingProgress(for: book)
     }
     
     func updateLocation(_ location: Int) {
@@ -151,6 +154,7 @@ class ReaderViewModel {
             book.addBookmark(newBookmark)
             isBookmarked = true
         }
+        CloudSyncService.shared.saveBookmarks(for: book)
     }
     
     func removeBookmark(_ bookmark: Bookmark) {
@@ -159,11 +163,13 @@ class ReaderViewModel {
             if (book.bookmarks ?? []).isEmpty {
                 isBookmarked = false
             }
+            CloudSyncService.shared.saveBookmarks(for: book)
         }
     }
     
     func removeAllBookmarks() {
         book.bookmarks?.removeAll()
         isBookmarked = false
+        CloudSyncService.shared.saveBookmarks(for: book)
     }
 }

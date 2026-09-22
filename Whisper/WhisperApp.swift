@@ -2,12 +2,18 @@
 //  WhisperApp.swift
 //  Whisper
 //
-//  Created by Anurag Ambuj on 28/12/25.
+//  Created by Anurag Ambuj on 29/12/25.
 //
 
 import SwiftUI
 import SwiftData
 import Combine
+
+extension Notification.Name {
+    static let whisperOpenFile = Notification.Name("whisperOpenFile")
+    static let whisperOpenBookById = Notification.Name("whisperOpenBookById")
+    static let whisperResumeReading = Notification.Name("whisperResumeReading")
+}
 
 final class FileOpenManager: ObservableObject {
     static let shared = FileOpenManager()
@@ -20,40 +26,21 @@ final class FileOpenManager: ObservableObject {
     }
 }
 
-extension Notification.Name {
-    static let whisperOpenFile = Notification.Name("whisperOpenFile")
-    static let whisperOpenBookById = Notification.Name("whisperOpenBookById")
-    static let whisperResumeReading = Notification.Name("whisperResumeReading")
-}
-
 #if os(macOS)
 import AppKit
 
 final class WhisperAppDelegate: NSObject, NSApplicationDelegate {
-    func application(_ sender: NSApplication, openFiles filenames: [String]) {
-        for filename in filenames {
-            let url = URL(fileURLWithPath: filename)
-            FileOpenManager.shared.openURL(url)
-            NotificationCenter.default.post(name: .whisperOpenFile, object: url)
-        }
-        sender.reply(toOpenOrPrint: .success)
-    }
-    
-    func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls {
-            FileOpenManager.shared.openURL(url)
-            NotificationCenter.default.post(name: .whisperOpenFile, object: url)
-        }
+    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
+        let url = URL(fileURLWithPath: filename)
+        FileOpenManager.shared.openURL(url)
+        NotificationCenter.default.post(name: .whisperOpenFile, object: url)
+        return true
     }
 }
 
 final class WhisperWindowDelegate: NSObject, NSWindowDelegate {
-    func window(
-        _ window: NSWindow,
-        willUseFullScreenPresentationOptions proposedOptions: NSApplication.PresentationOptions = []
-    ) -> NSApplication.PresentationOptions {
-        // Auto-hides menu bar and titlebar in fullscreen; reveals both on hovering near top
-        return [.autoHideToolbar, .autoHideMenuBar, .fullScreen]
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        true
     }
 }
 
@@ -102,26 +89,35 @@ struct WhisperApp: App {
             Book.self,
             Bookmark.self,
         ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+        
+        // Try CloudKit-enabled configuration first for seamless cross-device syncing
+        let cloudConfig = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false, cloudKitDatabase: .automatic)
 
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            return try ModelContainer(for: schema, configurations: [cloudConfig])
         } catch {
-            print("Failed to initialize persistent ModelContainer: \(error). Attempting recovery...")
-            if let storeURL = modelConfiguration.url as URL? {
-                try? FileManager.default.removeItem(at: storeURL)
-                let shmURL = storeURL.deletingPathExtension().appendingPathExtension("store-shm")
-                let walURL = storeURL.deletingPathExtension().appendingPathExtension("store-wal")
-                try? FileManager.default.removeItem(at: shmURL)
-                try? FileManager.default.removeItem(at: walURL)
+            print("Notice: SwiftData CloudKit initialization: \(error.localizedDescription). Falling back to standard persistent store...")
+            let localConfig = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false, cloudKitDatabase: .none)
+            
+            do {
+                return try ModelContainer(for: schema, configurations: [localConfig])
+            } catch {
+                print("Failed to initialize persistent ModelContainer: \(error). Attempting recovery...")
+                if let storeURL = localConfig.url as URL? {
+                    try? FileManager.default.removeItem(at: storeURL)
+                    let shmURL = storeURL.deletingPathExtension().appendingPathExtension("store-shm")
+                    let walURL = storeURL.deletingPathExtension().appendingPathExtension("store-wal")
+                    try? FileManager.default.removeItem(at: shmURL)
+                    try? FileManager.default.removeItem(at: walURL)
+                }
+                if let recoveredContainer = try? ModelContainer(for: schema, configurations: [localConfig]) {
+                    return recoveredContainer
+                }
+                let fallbackConfig = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+                return (try? ModelContainer(for: schema, configurations: [fallbackConfig])) ?? {
+                    fatalError("Could not create ModelContainer: \(error)")
+                }()
             }
-            if let recoveredContainer = try? ModelContainer(for: schema, configurations: [modelConfiguration]) {
-                return recoveredContainer
-            }
-            let fallbackConfig = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-            return (try? ModelContainer(for: schema, configurations: [fallbackConfig])) ?? {
-                fatalError("Could not create ModelContainer: \(error)")
-            }()
         }
     }()
 
@@ -148,7 +144,7 @@ struct WhisperApp: App {
                 }
             )
             .windowToolbarFullScreenVisibility(.onHover)
-            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("whisperOpenFile"))) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .whisperOpenFile)) { _ in
                 showSplash = false
             }
             #endif
@@ -169,6 +165,7 @@ struct WhisperApp: App {
             }
             .onAppear {
                 BookService.shared.setModelContainer(sharedModelContainer)
+                CloudSyncService.shared.startSyncEngine(container: sharedModelContainer)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                     withAnimation(.easeOut(duration: 0.5)) {
                         showSplash = false

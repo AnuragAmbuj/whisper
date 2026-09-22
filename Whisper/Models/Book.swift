@@ -23,7 +23,7 @@ final class Book {
 
   // Optional to safely deserialize legacy database records where format was NULL
   var format: BookFormat? = BookFormat.text
-  var url: URL? = nil  // Local file URL
+  var url: URL? = nil  // Local or cloud file URL
   var sampleImages: [String] = []  // For mock comics
 
   @Relationship(deleteRule: .cascade, inverse: \Bookmark.book)
@@ -34,22 +34,76 @@ final class Book {
     set { bookmarks = newValue }
   }
 
-  var bookDir: URL? {
-    let currentFormat = format ?? .text
-    guard currentFormat == .epub || currentFormat == .comic else { return url }
+  /// Resolves the actual reachable file URL across devices (iPhone, iPad, Mac)
+  /// Checks local container path, fallback documents directory by filename, and iCloud Drive.
+  var resolvedURL: URL? {
+    let fileManager = FileManager.default
     
-    // 1. If explicit URL exists on disk, use it
-    if let url = url, FileManager.default.fileExists(atPath: url.path) {
+    // 1. Direct file existence check
+    if let url = url, fileManager.fileExists(atPath: url.path) {
       return url
     }
     
+    // 2. Resolve inside local Documents/Books directory by filename
+    if let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first {
+      let booksDir = docs.appendingPathComponent("Books", isDirectory: true)
+      if let fileName = url?.lastPathComponent, !fileName.isEmpty {
+        let localCandidate = booksDir.appendingPathComponent(fileName)
+        if fileManager.fileExists(atPath: localCandidate.path) {
+          return localCandidate
+        }
+      }
+    }
+    
+    // 3. Resolve inside iCloud Drive Ubiquity Container Documents/Books
+    if let cloudDocs = CloudSyncService.resolvedUbiquityDocumentsURL {
+      let cloudBooksDir = cloudDocs.appendingPathComponent("Books", isDirectory: true)
+      if let fileName = url?.lastPathComponent, !fileName.isEmpty {
+        let cloudCandidate = cloudBooksDir.appendingPathComponent(fileName)
+        if fileManager.fileExists(atPath: cloudCandidate.path) {
+          return cloudCandidate
+        }
+      }
+    }
+    
+    return url
+  }
+
+  /// Resolves the directory for reading unpacked EPUB or Comic books.
+  /// If the unpacked cache is missing on this device (e.g. freshly synced to iPad),
+  /// it automatically unpacks the archive file into the local sandbox on demand.
+  var bookDir: URL? {
+    let currentFormat = format ?? .text
+    guard currentFormat == .epub || currentFormat == .comic else { return resolvedURL }
+    let fileManager = FileManager.default
+    
+    // 1. If explicit URL exists on disk and is a directory
+    if let url = url, fileManager.fileExists(atPath: url.path) {
+      var isDir: ObjCBool = false
+      if fileManager.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+        return url
+      }
+    }
+    
     // 2. Resolve inside standard documents directory for epub/comic
-    guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-    else { return url }
+    guard let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first
+    else { return resolvedURL }
     
     let path = docs.appendingPathComponent("Books", isDirectory: true).appendingPathComponent(id.uuidString, isDirectory: true)
-    if FileManager.default.fileExists(atPath: path.path) {
+    if fileManager.fileExists(atPath: path.path) {
       return path
+    }
+    
+    // 3. Auto-unpack from archive file (e.g. synced from iCloud or local) if unzipped cache is missing
+    if let archiveURL = resolvedURL, fileManager.fileExists(atPath: archiveURL.path) {
+      var isDir: ObjCBool = false
+      if !fileManager.fileExists(atPath: archiveURL.path, isDirectory: &isDir) || !isDir.boolValue {
+        try? fileManager.createDirectory(at: path, withIntermediateDirectories: true)
+        try? MiniZip.shared.unzip(sourceURL: archiveURL, destinationURL: path)
+        if fileManager.fileExists(atPath: path.path) {
+          return path
+        }
+      }
     }
     
     return path
@@ -88,16 +142,20 @@ final class Book {
     bookmarks?.append(bookmark)
   }
 
-  /// Resolves the actual text content of the book across all formats (EPUB, PDF, Text, etc.)
-  /// Enables TypeSafe AI semantic search, character extraction, and summarization to operate
-  /// on the true book text rather than brief metadata summaries.
+  func removeBookmark(_ bookmark: Bookmark) {
+    bookmarks?.removeAll { $0.id == bookmark.id }
+  }
+
+  // MARK: - Searchable Text Resolution for Smart AI Find
+
+  /// Resolves the actual full body text of the book across formats
+  /// - Text: returns `content` or raw file content
+  /// - EPUB: reads all chapter HTML/XHTML files from `bookDir` and strips tags
+  /// - PDF: reads all text from `PDFDocument` pages
   func resolveSearchableContent() -> String {
-    // 1. Plain Text format
-    if format == .text || format == nil {
-      if !content.isEmpty && content.count > 60 {
-        return content
-      }
-      if let fileURL = url,
+    // 1. Text format: read from file if available, or return stored content
+    if format == .text {
+      if let fileURL = resolvedURL,
          let fileContent = try? String(contentsOf: fileURL, encoding: .utf8),
          !fileContent.isEmpty {
         return fileContent
@@ -165,7 +223,7 @@ final class Book {
     }
 
     // 3. PDF format: extract text from pages
-    if format == .pdf, let pdfURL = url, FileManager.default.fileExists(atPath: pdfURL.path) {
+    if format == .pdf, let pdfURL = resolvedURL, FileManager.default.fileExists(atPath: pdfURL.path) {
       #if canImport(PDFKit)
       if let doc = PDFDocument(url: pdfURL) {
         var pagesText: [String] = []
@@ -194,7 +252,7 @@ final class Book {
     // Delete extracted book directory
     if let dir = bookDir {
       try? fileManager.removeItem(at: dir)
-    } else if let fileURL = url, fileURL.isFileURL {
+    } else if let fileURL = resolvedURL, fileURL.isFileURL {
       try? fileManager.removeItem(at: fileURL)
     }
 
@@ -228,7 +286,7 @@ enum BookFormat: String, Codable {
     case .text: return "doc.text"
     case .pdf: return "doc.richtext"
     case .comic: return "photo.on.rectangle.angled"
-    case .epub: return "book"
+    case .epub: return "book.closed"
     }
   }
 }

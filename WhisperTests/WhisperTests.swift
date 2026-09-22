@@ -415,4 +415,65 @@ struct WhisperTests {
         #expect(stops[2].location == 0.66)
         #expect(stops[3].location == 1.0)
     }
+
+    @Test @MainActor func testCloudSyncServiceReadingProgressSync() async throws {
+        let book = Book(
+            title: "Cloud Sync Test",
+            author: "Author",
+            content: "Testing iCloud Sync",
+            lastReadDate: Date(timeIntervalSince1970: 1000),
+            progress: 0.45
+        )
+        
+        let syncService = CloudSyncService.shared
+        syncService.saveReadingProgress(for: book)
+        
+        let remoteBookState = Book(
+            id: book.id,
+            title: book.title,
+            author: book.author,
+            content: book.content,
+            lastReadDate: Date(timeIntervalSince1970: 2000),
+            progress: 0.85
+        )
+        syncService.saveReadingProgress(for: remoteBookState)
+        
+        syncService.applyLatestCloudReadingProgress(for: book)
+        #expect(book.progress == 0.85)
+        #expect(book.lastReadDate == Date(timeIntervalSince1970: 2000))
+    }
+
+    @Test func testBookResolvedURLFallback() async throws {
+        let uniqueID = UUID().uuidString
+        let nonExistentURL = URL(fileURLWithPath: "/var/mobile/Containers/Data/Application/ABC-123/Documents/Books/\(uniqueID).epub")
+        let book = Book(
+            title: "Path Resiliency Test",
+            author: "Author",
+            format: .epub,
+            url: nonExistentURL
+        )
+        
+        let resolved = book.resolvedURL
+        #expect(resolved != nil)
+        
+        let bookDir = book.bookDir
+        #expect(bookDir != nil)
+    }
+
+    @Test @MainActor func testCloudSyncStatusProperties() async throws {
+        let statuses: [CloudSyncService.SyncStatus] = [
+            .checking,
+            .available,
+            .noAccount,
+            .restricted,
+            .temporarilyUnavailable,
+            .error("Sample Error")
+        ]
+        
+        for status in statuses {
+            #expect(!status.localizedDescription.isEmpty)
+            #expect(!status.iconName.isEmpty)
+        }
+    }
 }
+

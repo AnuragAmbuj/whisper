@@ -86,22 +86,28 @@ class ImportService {
         
         do {
             let fileManager = FileManager.default
-            if fileManager.fileExists(atPath: destinationURL.path) {
+            if fileManager.fileExists(atPath: destinationURL.path) && destinationURL != sourceURL {
                 try fileManager.removeItem(at: destinationURL)
             }
-            try fileManager.copyItem(at: sourceURL, to: destinationURL)
+            if destinationURL != sourceURL {
+                try fileManager.copyItem(at: sourceURL, to: destinationURL)
+            }
         } catch {
             print("ImportService: Failed to copy EPUB: \(error)")
             return nil
         }
         
         if let book = EpubParser.shared.parse(sourceURL: destinationURL) {
-            try? FileManager.default.removeItem(at: destinationURL)
+            book.url = destinationURL
+            // Trigger automatic iCloud Drive synchronization
+            CloudSyncService.shared.uploadBookToCloud(fileURL: destinationURL)
             return book
         }
         
         print("ImportService: EPUB parsing failed")
-        try? FileManager.default.removeItem(at: destinationURL)
+        if destinationURL != sourceURL {
+            try? FileManager.default.removeItem(at: destinationURL)
+        }
         return nil
     }
     
@@ -111,10 +117,12 @@ class ImportService {
         let destinationURL = booksDir.appendingPathComponent(fileName)
         
         do {
-            if fileManager.fileExists(atPath: destinationURL.path) {
+            if fileManager.fileExists(atPath: destinationURL.path) && destinationURL != sourceURL {
                 try fileManager.removeItem(at: destinationURL)
             }
-            try fileManager.copyItem(at: sourceURL, to: destinationURL)
+            if destinationURL != sourceURL {
+                try fileManager.copyItem(at: sourceURL, to: destinationURL)
+            }
         } catch {
             print("ImportService: Failed to copy PDF: \(error)")
             return nil
@@ -153,7 +161,7 @@ class ImportService {
             }
         }
         
-        return Book(
+        let book = Book(
             title: title,
             author: author,
             coverImageName: coverImageName,
@@ -161,6 +169,10 @@ class ImportService {
             format: .pdf,
             url: destinationURL
         )
+        
+        // Trigger automatic iCloud Drive synchronization
+        CloudSyncService.shared.uploadBookToCloud(fileURL: destinationURL)
+        return book
     }
     
     private func importComicSync(from sourceURL: URL, booksDir: URL) -> Book? {
@@ -168,10 +180,12 @@ class ImportService {
         
         do {
             let fileManager = FileManager.default
-            if fileManager.fileExists(atPath: destinationURL.path) {
+            if fileManager.fileExists(atPath: destinationURL.path) && destinationURL != sourceURL {
                 try fileManager.removeItem(at: destinationURL)
             }
-            try fileManager.copyItem(at: sourceURL, to: destinationURL)
+            if destinationURL != sourceURL {
+                try fileManager.copyItem(at: sourceURL, to: destinationURL)
+            }
         } catch {
             print("ImportService: Failed to copy comic: \(error)")
             return nil
@@ -184,12 +198,16 @@ class ImportService {
                     book.author = extracted.author
                 }
             }
-            try? FileManager.default.removeItem(at: destinationURL)
+            book.url = destinationURL
+            // Trigger automatic iCloud Drive synchronization
+            CloudSyncService.shared.uploadBookToCloud(fileURL: destinationURL)
             return book
         }
         
         print("ImportService: Comic parsing failed")
-        try? FileManager.default.removeItem(at: destinationURL)
+        if destinationURL != sourceURL {
+            try? FileManager.default.removeItem(at: destinationURL)
+        }
         return nil
     }
     
@@ -199,10 +217,12 @@ class ImportService {
         let destinationURL = booksDir.appendingPathComponent(fileName)
         
         do {
-            if fileManager.fileExists(atPath: destinationURL.path) {
+            if fileManager.fileExists(atPath: destinationURL.path) && destinationURL != sourceURL {
                 try fileManager.removeItem(at: destinationURL)
             }
-            try fileManager.copyItem(at: sourceURL, to: destinationURL)
+            if destinationURL != sourceURL {
+                try fileManager.copyItem(at: sourceURL, to: destinationURL)
+            }
         } catch {
             print("ImportService: Failed to copy text file: \(error)")
             return nil
@@ -215,7 +235,7 @@ class ImportService {
             content = textContent
         }
         
-        return Book(
+        let book = Book(
             title: metadata.title,
             author: metadata.author,
             coverImageName: "",
@@ -223,28 +243,107 @@ class ImportService {
             format: .text,
             url: destinationURL
         )
+        
+        // Trigger automatic iCloud Drive synchronization
+        CloudSyncService.shared.uploadBookToCloud(fileURL: destinationURL)
+        return book
     }
     
     private func generatePDFCover(from page: PDFPage, documentsDir: URL) -> String {
-        let coverName = UUID().uuidString + "_cover.png"
-        let coverURL = documentsDir.appendingPathComponent(coverName)
+        let pageRect = page.bounds(for: .mediaBox)
+        let targetSize = CGSize(width: 300, height: 400)
+        let renderer = ImageRenderer()
         
-        let thumbnail = page.thumbnail(of: CGSize(width: 300, height: 450), for: .mediaBox)
+        guard let image = renderer.render(page: page, originalSize: pageRect.size, targetSize: targetSize) else {
+            return ""
+        }
         
-        #if canImport(UIKit)
-        if let data = thumbnail.pngData() {
-            try? data.write(to: coverURL)
-            return coverName
+        let coverFileName = "cover_\(UUID().uuidString).jpg"
+        let coverURL = documentsDir.appendingPathComponent(coverFileName)
+        
+        if renderer.saveImage(image, to: coverURL) {
+            return coverFileName
         }
-        #elseif canImport(AppKit)
-        if let tiff = thumbnail.tiffRepresentation,
-           let rep = NSBitmapImageRep(data: tiff),
-           let data = rep.representation(using: .png, properties: [:]) {
-            try? data.write(to: coverURL)
-            return coverName
-        }
-        #endif
         
         return ""
     }
+}
+
+// MARK: - Platform Image Renderer
+private class ImageRenderer {
+    #if canImport(UIKit)
+    func render(page: PDFPage, originalSize: CGSize, targetSize: CGSize) -> UIImage? {
+        let renderer = UIGraphicsImageRenderer(size: targetSize)
+        return renderer.image { ctx in
+            UIColor.white.set()
+            ctx.fill(CGRect(origin: .zero, size: targetSize))
+            
+            let scaleX = targetSize.width / originalSize.width
+            let scaleY = targetSize.height / originalSize.height
+            let scale = min(scaleX, scaleY)
+            
+            let scaledWidth = originalSize.width * scale
+            let scaledHeight = originalSize.height * scale
+            let offsetX = (targetSize.width - scaledWidth) / 2
+            let offsetY = (targetSize.height - scaledHeight) / 2
+            
+            ctx.cgContext.translateBy(x: offsetX, y: targetSize.height - offsetY)
+            ctx.cgContext.scaleBy(x: scale, y: -scale)
+            
+            page.draw(with: .mediaBox, to: ctx.cgContext)
+        }
+    }
+    
+    func saveImage(_ image: UIImage, to url: URL) -> Bool {
+        guard let data = image.jpegData(compressionQuality: 0.8) else { return false }
+        do {
+            try data.write(to: url)
+            return true
+        } catch {
+            return false
+        }
+    }
+    #elseif canImport(AppKit)
+    func render(page: PDFPage, originalSize: CGSize, targetSize: CGSize) -> NSImage? {
+        let image = NSImage(size: targetSize)
+        image.lockFocus()
+        
+        NSColor.white.set()
+        NSRect(origin: .zero, size: targetSize).fill()
+        
+        let scaleX = targetSize.width / originalSize.width
+        let scaleY = targetSize.height / originalSize.height
+        let scale = min(scaleX, scaleY)
+        
+        let scaledWidth = originalSize.width * scale
+        let scaledHeight = originalSize.height * scale
+        let offsetX = (targetSize.width - scaledWidth) / 2
+        let offsetY = (targetSize.height - scaledHeight) / 2
+        
+        if let context = NSGraphicsContext.current?.cgContext {
+            context.saveGState()
+            context.translateBy(x: offsetX, y: offsetY)
+            context.scaleBy(x: scale, y: scale)
+            page.draw(with: .mediaBox, to: context)
+            context.restoreGState()
+        }
+        
+        image.unlockFocus()
+        return image
+    }
+    
+    func saveImage(_ image: NSImage, to url: URL) -> Bool {
+        guard let tiffData = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffData),
+              let data = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else {
+            return false
+        }
+        do {
+            try data.write(to: url)
+            return true
+        } catch {
+            return false
+        }
+    }
+    #endif
 }
