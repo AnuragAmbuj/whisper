@@ -14,6 +14,9 @@ struct CloudSyncSheet: View {
     @ObservedObject private var googleDrive = GoogleDriveSyncService.shared
     
     @State private var isPickingFolder = false
+    @State private var showClientIDField = false
+    @State private var clientIDInput = ""
+    @State private var isAuthenticating = false
     @State private var syncNotice: String? = nil
     
     var body: some View {
@@ -60,9 +63,81 @@ struct CloudSyncSheet: View {
                         .foregroundColor(.secondary)
                 }
                 
-                // MARK: - Google Drive Setup Section
+                // MARK: - Google Drive Direct Connection
                 if cloudSync.activeProvider == .googleDrive || cloudSync.providerPreference == .googleDrive {
-                    Section("Google Drive Configuration") {
+                    Section("Direct Google Drive (REST API)") {
+                        if googleDrive.isDirectAPIConnected {
+                            HStack {
+                                Image(systemName: "checkmark.seal.fill")
+                                    .foregroundColor(.green)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Connected to Google Drive")
+                                        .font(.subheadline.weight(.medium))
+                                    if let email = googleDrive.directUserEmail {
+                                        Text(email)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                Spacer()
+                                Button("Sign Out", role: .destructive) {
+                                    googleDrive.signOutDirectAccount()
+                                    syncNotice = "Disconnected from Google Drive."
+                                }
+                                .font(.caption)
+                            }
+                        } else {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Sign in to sync your library directly with your Google Drive without using the Files app.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                
+                                if showClientIDField {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Google OAuth Client ID")
+                                            .font(.caption.bold())
+                                            .foregroundColor(.secondary)
+                                        TextField("e.g. 12345-abc.apps.googleusercontent.com", text: $clientIDInput)
+                                            .textFieldStyle(.roundedBorder)
+                                            .autocorrectionDisabled()
+                                            #if os(iOS)
+                                            .textInputAutocapitalization(.never)
+                                            #endif
+                                            .font(.system(size: 13, design: .monospaced))
+                                    }
+                                    .padding(.vertical, 4)
+                                }
+                                
+                                HStack(spacing: 12) {
+                                    Button(action: handleDirectGoogleSignIn) {
+                                        HStack {
+                                            if isAuthenticating {
+                                                ProgressView()
+                                                    .controlSize(.small)
+                                            } else {
+                                                Image(systemName: "person.badge.key.fill")
+                                                Text("Sign In with Google")
+                                            }
+                                        }
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .disabled(isAuthenticating)
+                                    
+                                    Button(action: {
+                                        showClientIDField.toggle()
+                                    }) {
+                                        Image(systemName: "gearshape")
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .help("Configure Google Client ID")
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                    
+                    // MARK: - Alternative: Linked Folder (Files App)
+                    Section("Alternative: Linked Files App Folder") {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 Image(systemName: "folder.fill.badge.gearshape")
@@ -70,14 +145,14 @@ struct CloudSyncSheet: View {
                                     .foregroundColor(.blue)
                                 
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text("Linked Google Drive Folder")
+                                    Text("Linked Cloud Folder")
                                         .font(.subheadline.weight(.medium))
                                     if let folderName = googleDrive.linkedFolderName {
                                         Text("Folder: \(folderName)")
                                             .font(.caption)
                                             .foregroundColor(.green)
                                     } else {
-                                        Text("No folder linked yet. Link any Google Drive or cloud folder from the Files app.")
+                                        Text("Zero-config alternative: Link any Google Drive folder from the Files app.")
                                             .font(.caption)
                                             .foregroundColor(.secondary)
                                     }
@@ -91,7 +166,7 @@ struct CloudSyncSheet: View {
                                         systemImage: "folder.badge.plus"
                                     )
                                 }
-                                .buttonStyle(.borderedProminent)
+                                .buttonStyle(.bordered)
                                 .controlSize(.small)
                                 
                                 if googleDrive.isLinkedFolderActive {
@@ -147,7 +222,7 @@ struct CloudSyncSheet: View {
                                 ProgressView()
                                     .controlSize(.small)
                                     .padding(.trailing, 4)
-                                Text("Syncing...")
+                                Text(googleDrive.syncStatusMessage ?? "Syncing...")
                             } else {
                                 Image(systemName: "arrow.triangle.2.circlepath")
                                 Text("Sync Now")
@@ -168,7 +243,11 @@ struct CloudSyncSheet: View {
                         .font(.caption)
                     }
                     
-                    if let notice = syncNotice {
+                    if let error = googleDrive.lastErrorMessage {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    } else if let notice = syncNotice {
                         Text(notice)
                             .font(.caption)
                             .foregroundColor(.green)
@@ -179,9 +258,15 @@ struct CloudSyncSheet: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
+            .onAppear {
+                clientIDInput = googleDrive.clientID
+            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
+                        if !clientIDInput.isEmpty {
+                            googleDrive.clientID = clientIDInput
+                        }
                         dismiss()
                     }
                 }
@@ -201,9 +286,34 @@ struct CloudSyncSheet: View {
                         }
                     }
                 case .failure(let error):
-                    syncNotice = "Folder selection canceled or failed: \(error.localizedDescription)"
+                    syncNotice = "Folder selection canceled: \(error.localizedDescription)"
                 }
             }
+        }
+    }
+    
+    private func handleDirectGoogleSignIn() {
+        if !clientIDInput.isEmpty {
+            googleDrive.clientID = clientIDInput
+        }
+        
+        guard !googleDrive.clientID.isEmpty else {
+            showClientIDField = true
+            syncNotice = "Please enter your Google OAuth Client ID to sign in."
+            return
+        }
+        
+        isAuthenticating = true
+        syncNotice = nil
+        Task {
+            do {
+                try await googleDrive.signInWithGoogle()
+                syncNotice = "Successfully connected to Google Drive!"
+                await cloudSync.triggerSync()
+            } catch {
+                syncNotice = "Sign In failed: \(error.localizedDescription)"
+            }
+            isAuthenticating = false
         }
     }
     
@@ -214,10 +324,12 @@ struct CloudSyncSheet: View {
         case .iCloud:
             return "Syncing books, reading positions, and bookmarks via Apple iCloud."
         case .googleDrive:
-            if googleDrive.isLinkedFolderActive {
-                return "Syncing via linked folder '\(googleDrive.linkedFolderName ?? "")'."
+            if googleDrive.isDirectAPIConnected {
+                return "Direct REST API connection active (\(googleDrive.directUserEmail ?? ""))."
+            } else if googleDrive.isLinkedFolderActive {
+                return "Linked folder active: '\(googleDrive.linkedFolderName ?? "")'."
             } else {
-                return "Google Drive selected. Please link a folder to begin syncing."
+                return "Ready to connect via direct Google sign-in or linked folder."
             }
         case .auto:
             return "Auto selection active."
@@ -231,7 +343,7 @@ struct CloudSyncSheet: View {
         case .iCloud:
             return "Uses Apple iCloud Drive & Key-Value storage."
         case .googleDrive:
-            return "Uses Google Drive or a linked cloud folder. Works without Apple Developer Program membership."
+            return "Direct Google Drive REST v3 sync and optional linked folder."
         case .disabled:
             return "Cloud synchronization is completely paused."
         }
