@@ -47,7 +47,7 @@ final class CloudSyncService: ObservableObject {
             case .noAccount:
                 return "No iCloud Account"
             case .restricted:
-                return "iCloud Restricted"
+                return "iCloud Not Entitled on Device"
             case .temporarilyUnavailable:
                 return "iCloud Offline"
             case .error(let msg):
@@ -81,15 +81,10 @@ final class CloudSyncService: ObservableObject {
     
     private var modelContainer: ModelContainer?
     private var kvStoreObserver: Any?
-    
-    private var isTestingEnvironment: Bool {
-        NSClassFromString("XCTestCase") != nil ||
-        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-    }
     private var testStore: [String: Any] = [:]
     
     private lazy var container: CKContainer? = {
-        guard !isTestingEnvironment else { return nil }
+        guard !EntitlementHelper.isTesting, EntitlementHelper.canUseCloudKit else { return nil }
         return CKContainer(identifier: Self.containerIdentifier)
     }()
     
@@ -113,7 +108,7 @@ final class CloudSyncService: ObservableObject {
     // MARK: - iCloud Account Monitoring
     
     private func setupAccountObserver() {
-        guard !isTestingEnvironment else { return }
+        guard !EntitlementHelper.isTesting, EntitlementHelper.canUseCloudKit else { return }
         NotificationCenter.default.addObserver(
             forName: .CKAccountChanged,
             object: nil,
@@ -128,8 +123,14 @@ final class CloudSyncService: ObservableObject {
     
     /// Queries the current iCloud account status
     func checkAccountStatus() async {
-        guard let container = container else {
-            self.status = .available
+        guard EntitlementHelper.canUseCloudKit, let container = container else {
+            if EntitlementHelper.canUseCloudDocuments {
+                self.status = .available
+            } else if EntitlementHelper.isTesting {
+                self.status = .available
+            } else {
+                self.status = .restricted
+            }
             if self.lastSyncDate == nil {
                 self.lastSyncDate = Date()
             }
@@ -162,11 +163,10 @@ final class CloudSyncService: ObservableObject {
     
     /// Resolves the ubiquity container Documents/Books path for cross-device file synchronization
     func resolveUbiquityContainer() {
-        guard !isTestingEnvironment else { return }
+        guard !EntitlementHelper.isTesting else { return }
         
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let docsURL = Self.resolvedUbiquityDocumentsURL else {
-                print("CloudSyncService: Ubiquity container not yet available or iCloud Drive is disabled.")
                 return
             }
             
@@ -335,7 +335,7 @@ final class CloudSyncService: ObservableObject {
     // MARK: - Reading Progress Sync via NSUbiquitousKeyValueStore
     
     private func setupKVStoreObserver() {
-        guard !isTestingEnvironment else { return }
+        guard !EntitlementHelper.isTesting, EntitlementHelper.canUseKeyValueStore else { return }
         kvStoreObserver = NotificationCenter.default.addObserver(
             forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
             object: NSUbiquitousKeyValueStore.default,
@@ -352,10 +352,10 @@ final class CloudSyncService: ObservableObject {
     func saveReadingProgress(for book: Book) {
         let idStr = book.id.uuidString
         let dateValue = book.lastReadDate.timeIntervalSince1970
-        if isTestingEnvironment {
-            testStore["prog_\(idStr)"] = book.progress
-            testStore["date_\(idStr)"] = dateValue
-        }
+        testStore["prog_\(idStr)"] = book.progress
+        testStore["date_\(idStr)"] = dateValue
+        
+        guard EntitlementHelper.canUseKeyValueStore else { return }
         let store = NSUbiquitousKeyValueStore.default
         store.set(book.progress, forKey: "prog_\(idStr)")
         store.set(dateValue, forKey: "date_\(idStr)")
@@ -366,9 +366,9 @@ final class CloudSyncService: ObservableObject {
     func saveBookmarks(for book: Book) {
         let idStr = book.id.uuidString
         let locations = book.safeBookmarks.map { $0.pageOrLocation }
-        if isTestingEnvironment {
-            testStore["bm_\(idStr)"] = locations
-        }
+        testStore["bm_\(idStr)"] = locations
+        
+        guard EntitlementHelper.canUseKeyValueStore else { return }
         let store = NSUbiquitousKeyValueStore.default
         store.set(locations, forKey: "bm_\(idStr)")
         store.synchronize()
@@ -377,11 +377,15 @@ final class CloudSyncService: ObservableObject {
     /// Updates local reading progress if a more recent state exists in iCloud
     func applyLatestCloudReadingProgress(for book: Book) {
         let idStr = book.id.uuidString
-        let store = NSUbiquitousKeyValueStore.default
-        var cloudDateStamp = store.double(forKey: "date_\(idStr)")
-        var cloudProgress = store.double(forKey: "prog_\(idStr)")
+        var cloudDateStamp: Double = 0.0
+        var cloudProgress: Double = 0.0
         
-        if isTestingEnvironment, let testDate = testStore["date_\(idStr)"] as? Double, let testProg = testStore["prog_\(idStr)"] as? Double {
+        if EntitlementHelper.canUseKeyValueStore {
+            let store = NSUbiquitousKeyValueStore.default
+            cloudDateStamp = store.double(forKey: "date_\(idStr)")
+            cloudProgress = store.double(forKey: "prog_\(idStr)")
+        } else if let testDate = testStore["date_\(idStr)"] as? Double,
+                  let testProg = testStore["prog_\(idStr)"] as? Double {
             cloudDateStamp = testDate
             cloudProgress = testProg
         }

@@ -90,8 +90,9 @@ struct WhisperApp: App {
             Bookmark.self,
         ])
         
-        // Try CloudKit-enabled configuration first for seamless cross-device syncing
-        let cloudConfig = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false, cloudKitDatabase: .automatic)
+        // Only enable CloudKit database synchronization if the binary possesses the CloudKit entitlement
+        let cloudKitDB: ModelConfiguration.CloudKitDatabase = EntitlementHelper.canUseCloudKit ? .automatic : .none
+        let cloudConfig = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false, cloudKitDatabase: cloudKitDB)
 
         do {
             return try ModelContainer(for: schema, configurations: [cloudConfig])
