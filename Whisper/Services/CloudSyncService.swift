@@ -30,6 +30,26 @@ final class CloudSyncService: ObservableObject {
         return nil
     }
     
+    // MARK: - Provider Options
+    
+    enum ProviderPreference: String, CaseIterable, Identifiable {
+        case auto = "Auto (iCloud / Google Drive)"
+        case iCloud = "iCloud Drive"
+        case googleDrive = "Google Drive"
+        case disabled = "Off"
+        
+        var id: String { rawValue }
+        
+        var title: String {
+            switch self {
+            case .auto: return "Auto (iCloud / GDrive)"
+            case .iCloud: return "iCloud Drive"
+            case .googleDrive: return "Google Drive"
+            case .disabled: return "Disabled"
+            }
+        }
+    }
+    
     enum SyncStatus: Equatable {
         case checking
         case available
@@ -73,11 +93,74 @@ final class CloudSyncService: ObservableObject {
         }
     }
     
+    // MARK: - Published Properties
+    
+    @Published var providerPreference: ProviderPreference {
+        didSet {
+            UserDefaults.standard.set(providerPreference.rawValue, forKey: "whisper_sync_provider_pref")
+            Task {
+                await checkAccountStatus()
+            }
+        }
+    }
+    
     @Published var status: SyncStatus = .checking
     @Published var lastSyncDate: Date? = nil
     @Published var isSyncing: Bool = false
     @Published var iCloudDriveURL: URL? = nil
     @Published var cloudBookFiles: [URL] = []
+    
+    /// Resolves the actual sync provider in effect
+    var activeProvider: ProviderPreference {
+        switch providerPreference {
+        case .auto:
+            return EntitlementHelper.isEntitledForiCloud ? .iCloud : .googleDrive
+        case .iCloud:
+            return .iCloud
+        case .googleDrive:
+            return .googleDrive
+        case .disabled:
+            return .disabled
+        }
+    }
+    
+    /// Human-friendly status line for UI display
+    var statusText: String {
+        switch activeProvider {
+        case .disabled:
+            return "Sync Off"
+        case .iCloud:
+            return status.localizedDescription
+        case .googleDrive:
+            if GoogleDriveSyncService.shared.isLinkedFolderActive {
+                return "Google Drive: \(GoogleDriveSyncService.shared.linkedFolderName ?? "Linked")"
+            } else if GoogleDriveSyncService.shared.isDirectAPIConnected {
+                return "Google Drive: \(GoogleDriveSyncService.shared.directUserEmail ?? "Connected")"
+            } else {
+                return "Google Drive (Ready to Link)"
+            }
+        case .auto:
+            return status.localizedDescription
+        }
+    }
+    
+    /// Appropriate SF Symbol for current sync status
+    var statusIcon: String {
+        switch activeProvider {
+        case .disabled:
+            return "circle.slash"
+        case .iCloud:
+            return status == .available ? "checkmark.icloud.fill" : status.iconName
+        case .googleDrive:
+            if GoogleDriveSyncService.shared.isLinkedFolderActive || GoogleDriveSyncService.shared.isDirectAPIConnected {
+                return "externaldrive.fill.badge.checkmark"
+            } else {
+                return "externaldrive.badge.questionmark"
+            }
+        case .auto:
+            return "arrow.triangle.2.circlepath"
+        }
+    }
     
     private var modelContainer: ModelContainer?
     private var kvStoreObserver: Any?
@@ -89,6 +172,9 @@ final class CloudSyncService: ObservableObject {
     }()
     
     private init() {
+        let savedPref = UserDefaults.standard.string(forKey: "whisper_sync_provider_pref") ?? ProviderPreference.auto.rawValue
+        self.providerPreference = ProviderPreference(rawValue: savedPref) ?? .auto
+        
         setupAccountObserver()
         setupKVStoreObserver()
         Task {
@@ -164,6 +250,7 @@ final class CloudSyncService: ObservableObject {
     /// Resolves the ubiquity container Documents/Books path for cross-device file synchronization
     func resolveUbiquityContainer() {
         guard !EntitlementHelper.isTesting else { return }
+        guard activeProvider == .iCloud else { return }
         
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let docsURL = Self.resolvedUbiquityDocumentsURL else {
@@ -217,28 +304,37 @@ final class CloudSyncService: ObservableObject {
         }
     }
     
-    // MARK: - Bidirectional Sync: Upload Local Books to iCloud
+    // MARK: - Bidirectional Sync: Upload Local Books to Cloud
     
-    /// Uploads/copies a local book file to the iCloud Drive container for cross-device sync
+    /// Uploads/copies a local book file to the active cloud service (iCloud Drive or Google Drive)
     func uploadBookToCloud(fileURL: URL) {
         guard fileURL.isFileURL, FileManager.default.fileExists(atPath: fileURL.path) else { return }
         
-        DispatchQueue.global(qos: .utility).async {
-            guard let docs = Self.resolvedUbiquityDocumentsURL else { return }
-            let booksDir = docs.appendingPathComponent("Books", isDirectory: true)
-            try? FileManager.default.createDirectory(at: booksDir, withIntermediateDirectories: true)
+        switch activeProvider {
+        case .disabled:
+            return
             
-            let destinationURL = booksDir.appendingPathComponent(fileURL.lastPathComponent)
+        case .googleDrive:
+            GoogleDriveSyncService.shared.exportBookToLinkedFolder(fileURL: fileURL)
             
-            if !FileManager.default.fileExists(atPath: destinationURL.path) {
-                do {
-                    try FileManager.default.copyItem(at: fileURL, to: destinationURL)
-                    print("CloudSyncService: Uploaded '\(fileURL.lastPathComponent)' to iCloud Drive.")
-                    DispatchQueue.main.async {
-                        CloudSyncService.shared.refreshCloudFiles()
+        case .iCloud, .auto:
+            DispatchQueue.global(qos: .utility).async {
+                guard let docs = Self.resolvedUbiquityDocumentsURL else { return }
+                let booksDir = docs.appendingPathComponent("Books", isDirectory: true)
+                try? FileManager.default.createDirectory(at: booksDir, withIntermediateDirectories: true)
+                
+                let destinationURL = booksDir.appendingPathComponent(fileURL.lastPathComponent)
+                
+                if !FileManager.default.fileExists(atPath: destinationURL.path) {
+                    do {
+                        try FileManager.default.copyItem(at: fileURL, to: destinationURL)
+                        print("CloudSyncService: Uploaded '\(fileURL.lastPathComponent)' to iCloud Drive.")
+                        DispatchQueue.main.async {
+                            CloudSyncService.shared.refreshCloudFiles()
+                        }
+                    } catch {
+                        print("CloudSyncService: Failed to upload '\(fileURL.lastPathComponent)' to iCloud: \(error)")
                     }
-                } catch {
-                    print("CloudSyncService: Failed to upload '\(fileURL.lastPathComponent)' to iCloud: \(error)")
                 }
             }
         }
@@ -332,7 +428,7 @@ final class CloudSyncService: ObservableObject {
         }
     }
     
-    // MARK: - Reading Progress Sync via NSUbiquitousKeyValueStore
+    // MARK: - Reading Progress Sync via NSUbiquitousKeyValueStore & Google Drive
     
     private func setupKVStoreObserver() {
         guard !EntitlementHelper.isTesting, EntitlementHelper.canUseKeyValueStore else { return }
@@ -348,39 +444,58 @@ final class CloudSyncService: ObservableObject {
         NSUbiquitousKeyValueStore.default.synchronize()
     }
     
-    /// Persists a book's reading progress and timestamp to iCloud Key-Value store
+    /// Persists a book's reading progress and timestamp to active cloud service
     func saveReadingProgress(for book: Book) {
         let idStr = book.id.uuidString
         let dateValue = book.lastReadDate.timeIntervalSince1970
         testStore["prog_\(idStr)"] = book.progress
         testStore["date_\(idStr)"] = dateValue
         
-        guard EntitlementHelper.canUseKeyValueStore else { return }
-        let store = NSUbiquitousKeyValueStore.default
-        store.set(book.progress, forKey: "prog_\(idStr)")
-        store.set(dateValue, forKey: "date_\(idStr)")
-        store.synchronize()
+        if EntitlementHelper.isTesting {
+            return
+        }
+        
+        if activeProvider == .googleDrive {
+            GoogleDriveSyncService.shared.saveReadingProgress(for: book)
+        } else if EntitlementHelper.canUseKeyValueStore {
+            let store = NSUbiquitousKeyValueStore.default
+            store.set(book.progress, forKey: "prog_\(idStr)")
+            store.set(dateValue, forKey: "date_\(idStr)")
+            store.synchronize()
+        }
     }
     
-    /// Persists bookmarks count/locations for a book to iCloud
+    /// Persists bookmarks count/locations for a book to active cloud service
     func saveBookmarks(for book: Book) {
         let idStr = book.id.uuidString
         let locations = book.safeBookmarks.map { $0.pageOrLocation }
         testStore["bm_\(idStr)"] = locations
         
-        guard EntitlementHelper.canUseKeyValueStore else { return }
-        let store = NSUbiquitousKeyValueStore.default
-        store.set(locations, forKey: "bm_\(idStr)")
-        store.synchronize()
+        if activeProvider == .googleDrive {
+            GoogleDriveSyncService.shared.saveReadingProgress(for: book)
+        } else if EntitlementHelper.canUseKeyValueStore {
+            let store = NSUbiquitousKeyValueStore.default
+            store.set(locations, forKey: "bm_\(idStr)")
+            store.synchronize()
+        }
     }
     
-    /// Updates local reading progress if a more recent state exists in iCloud
+    /// Updates local reading progress if a more recent state exists in active cloud service
     func applyLatestCloudReadingProgress(for book: Book) {
         let idStr = book.id.uuidString
         var cloudDateStamp: Double = 0.0
         var cloudProgress: Double = 0.0
         
-        if EntitlementHelper.canUseKeyValueStore {
+        if EntitlementHelper.isTesting {
+            if let testDate = testStore["date_\(idStr)"] as? Double,
+               let testProg = testStore["prog_\(idStr)"] as? Double {
+                cloudDateStamp = testDate
+                cloudProgress = testProg
+            }
+        } else if activeProvider == .googleDrive {
+            GoogleDriveSyncService.shared.applyLatestReadingProgress(for: book)
+            return
+        } else if EntitlementHelper.canUseKeyValueStore {
             let store = NSUbiquitousKeyValueStore.default
             cloudDateStamp = store.double(forKey: "date_\(idStr)")
             cloudProgress = store.double(forKey: "prog_\(idStr)")
@@ -421,17 +536,47 @@ final class CloudSyncService: ObservableObject {
     
     // MARK: - On-Demand Manual Refresh
     
-    /// Triggers a full on-demand sync refresh
+    /// Triggers a full on-demand sync refresh across the active provider
     func triggerSync() async {
         isSyncing = true
-        await checkAccountStatus()
-        resolveUbiquityContainer()
-        syncLocalBooksToCloud()
-        importDiscoveredCloudBooks()
-        applyCloudReadingStates()
+        defer {
+            self.lastSyncDate = Date()
+            self.isSyncing = false
+        }
         
-        try? await Task.sleep(nanoseconds: 800_000_000)
-        self.lastSyncDate = Date()
-        isSyncing = false
+        switch activeProvider {
+        case .disabled:
+            return
+            
+        case .iCloud:
+            await checkAccountStatus()
+            resolveUbiquityContainer()
+            syncLocalBooksToCloud()
+            importDiscoveredCloudBooks()
+            applyCloudReadingStates()
+            
+        case .googleDrive:
+            guard let context = modelContainer?.mainContext else { return }
+            let descriptor = FetchDescriptor<Book>()
+            let existingBooks = (try? context.fetch(descriptor)) ?? []
+            
+            await GoogleDriveSyncService.shared.triggerSync(
+                existingBooks: existingBooks,
+                onImportNewBook: { fileURL in
+                    if let newBook = await ImportService.shared.importFile(at: fileURL) {
+                        context.insert(newBook)
+                        print("GoogleDriveSync: Successfully imported '\(newBook.title)'")
+                    }
+                }
+            )
+            
+            try? context.save()
+            NotificationCenter.default.post(name: .whisperLibraryDidSync, object: nil)
+            
+        case .auto:
+            break
+        }
+        
+        try? await Task.sleep(nanoseconds: 500_000_000)
     }
 }

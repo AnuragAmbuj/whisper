@@ -475,5 +475,23 @@ struct WhisperTests {
             #expect(!status.iconName.isEmpty)
         }
     }
-}
 
+    @Test @MainActor func testGoogleDriveAndCloudSyncProviderSwitching() async throws {
+        let syncService = CloudSyncService.shared
+        let original = syncService.providerPreference
+        
+        syncService.providerPreference = .googleDrive
+        #expect(syncService.activeProvider == .googleDrive)
+        #expect(syncService.statusIcon.contains("externaldrive"))
+        
+        syncService.providerPreference = .disabled
+        #expect(syncService.activeProvider == .disabled)
+        #expect(syncService.statusText == "Sync Off")
+        
+        syncService.providerPreference = .iCloud
+        #expect(syncService.activeProvider == .iCloud)
+        
+        // Restore
+        syncService.providerPreference = original
+    }
+}

@@ -16,6 +16,7 @@ struct LibraryView: View {
   @State private var showImportError = false
   @State private var importErrorMessage: String?
   @State private var hoveredCategory: String? = nil
+  @State private var showSyncSheet = false
   @ObservedObject private var cloudSync = CloudSyncService.shared
   @Query var books: [Book]
   @Environment(\.modelContext) private var modelContext
@@ -76,22 +77,31 @@ struct LibraryView: View {
       .toolbar {
         ToolbarItem(placement: .primaryAction) {
           HStack(spacing: DS.Spacing.sm) {
-            // iCloud Sync Action Button
-            Button(action: {
-              Task {
-                await cloudSync.triggerSync()
+            // Cloud Sync Action Menu & Status (iCloud / Google Drive)
+            Menu {
+              Button(action: {
+                Task {
+                  await cloudSync.triggerSync()
+                }
+              }) {
+                Label("Sync Now", systemImage: "arrow.triangle.2.circlepath")
               }
-            }) {
+              
+              Button(action: {
+                showSyncSheet = true
+              }) {
+                Label("Sync Settings (\(cloudSync.activeProvider.title))...", systemImage: "gearshape")
+              }
+            } label: {
               if cloudSync.isSyncing {
                 ProgressView()
                   .controlSize(.small)
               } else {
-                Image(systemName: cloudSync.status == .available ? "icloud.fill" : cloudSync.status.iconName)
-                  .foregroundColor(cloudSync.status == .available ? DS.Colors.accent : .secondary)
+                Image(systemName: cloudSync.statusIcon)
+                  .foregroundColor(cloudSync.activeProvider == .disabled ? .secondary : DS.Colors.accent)
               }
             }
-            .disabled(cloudSync.isSyncing)
-            .help("Sync Library with iCloud")
+            .help(cloudSync.statusText)
 
             Menu {
               Button(action: resetToSampleLibrary) {
@@ -114,6 +124,9 @@ struct LibraryView: View {
         allowsMultipleSelection: false
       ) { result in
         handleImport(result: result)
+      }
+      .sheet(isPresented: $showSyncSheet) {
+        CloudSyncSheet()
       }
       .alert("Import Notice", isPresented: $showImportError) {
         Button("OK", role: .cancel) {}
