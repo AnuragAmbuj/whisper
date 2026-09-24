@@ -22,12 +22,12 @@
 			<string>Google OAuth Redirect</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>com.googleusercontent.apps.556021666379-pek1a1dudu2f4870gf57k4quheasusst</string>
+				<string>$(GOOGLE_REVERSED_CLIENT_ID)</string>
 			</array>
 		</dict>
 	</array>
 	<key>GIDClientID</key>
-	<string>556021666379-pek1a1dudu2f4870gf57k4quheasusst.apps.googleusercontent.com</string>
+	<string>$(GOOGLE_CLIENT_ID)</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIconName</key>
