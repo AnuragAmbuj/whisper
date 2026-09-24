@@ -11,6 +11,35 @@ import SwiftData
 import PDFKit
 #endif
 
+
+enum BookSyncStatus: Equatable {
+  case synced
+  case syncing
+  case pending
+  case failed(String)
+  case localOnly
+
+  var iconName: String {
+    switch self {
+    case .synced: return "checkmark.icloud.fill"
+    case .syncing: return "arrow.triangle.2.circlepath"
+    case .pending: return "icloud.and.arrow.up"
+    case .failed: return "exclamationmark.icloud.fill"
+    case .localOnly: return "internaldrive"
+    }
+  }
+
+  var displayText: String {
+    switch self {
+    case .synced: return "Synced"
+    case .syncing: return "Syncing..."
+    case .pending: return "Pending Sync"
+    case .failed(let err): return "Sync Error: \(err)"
+    case .localOnly: return "On Device"
+    }
+  }
+}
+
 @Model
 final class Book {
   var id: UUID = UUID()
@@ -25,6 +54,12 @@ final class Book {
   var format: BookFormat? = BookFormat.text
   var url: URL? = nil  // Local or cloud file URL
   var sampleImages: [String] = []  // For mock comics
+
+  // Cloud Synchronization Status
+  var cloudFileID: String? = nil
+  var isCloudSynced: Bool = false
+  var cloudSyncError: String? = nil
+  var cloudSyncDate: Date? = nil
 
   @Relationship(deleteRule: .cascade, inverse: \Bookmark.book)
   var bookmarks: [Bookmark]? = []
@@ -119,8 +154,16 @@ final class Book {
     progress: Double = 0.0,
     format: BookFormat? = .text,
     url: URL? = nil,
-    sampleImages: [String] = []
+    sampleImages: [String] = [],
+    cloudFileID: String? = nil,
+    isCloudSynced: Bool = false,
+    cloudSyncError: String? = nil,
+    cloudSyncDate: Date? = nil
   ) {
+    self.cloudFileID = cloudFileID
+    self.isCloudSynced = isCloudSynced
+    self.cloudSyncError = cloudSyncError
+    self.cloudSyncDate = cloudSyncDate
     self.id = id
     self.title = title
     self.author = author

@@ -11,6 +11,7 @@ struct BookDetailView: View {
   let book: Book
   @Environment(\.horizontalSizeClass) var hSizeClass
   @State private var navigateToReader: Bool = false
+  @ObservedObject private var cloudSync = CloudSyncService.shared
 
   var body: some View {
     #if os(macOS)
@@ -75,6 +76,9 @@ struct BookDetailView: View {
 
                 // Badges row
                 badgesRow
+                  .padding(.horizontal)
+
+                cloudSyncCard
                   .padding(.horizontal)
 
                 primaryActionButton
@@ -178,6 +182,8 @@ struct BookDetailView: View {
 
       badgesRow
 
+      cloudSyncCard
+
       VStack(alignment: .leading, spacing: DS.Spacing.md) {
         Text("Synopsis")
           .font(.headline)
@@ -239,6 +245,80 @@ struct BookDetailView: View {
         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous))
         .overlay(
           RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
+            .stroke(DS.Colors.border, lineWidth: 1)
+        )
+      }
+
+      if cloudSync.activeProvider != .disabled {
+        let syncStatus = cloudSync.syncStatus(for: book)
+        HStack(spacing: 4) {
+          Image(systemName: syncStatus.iconName)
+          Text(syncStatus.displayText)
+        }
+        .font(.caption.bold())
+        .foregroundColor(syncStatus == .synced ? .green : (syncStatus == .syncing ? .blue : (book.cloudSyncError != nil ? .orange : .secondary)))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(DS.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous))
+        .overlay(
+          RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
+            .stroke(DS.Colors.border, lineWidth: 1)
+        )
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var cloudSyncCard: some View {
+    if cloudSync.activeProvider != .disabled {
+      let status = cloudSync.syncStatus(for: book)
+      if status != .synced {
+        HStack {
+          VStack(alignment: .leading, spacing: 2) {
+            Text(book.cloudSyncError != nil ? "Cloud Sync Notice" : "Cloud Backup")
+              .font(.subheadline.bold())
+              .foregroundColor(book.cloudSyncError != nil ? .orange : .primary)
+            if let err = cloudSync.bookSyncErrors[book.id] ?? book.cloudSyncError {
+              Text(err)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .lineLimit(2)
+            } else {
+              Text(cloudSync.activeProvider == .googleDrive ? "Ready to sync with Google Drive." : "Ready to sync with iCloud.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            }
+          }
+          
+          Spacer()
+          
+          Button(action: {
+            Task {
+              await cloudSync.syncSingleBook(book)
+            }
+          }) {
+            HStack(spacing: 6) {
+              if cloudSync.isBookSyncing(book.id) {
+                ProgressView()
+                  .controlSize(.small)
+                Text("Syncing...")
+              } else {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                Text(book.cloudSyncError != nil ? "Retry" : "Sync")
+              }
+            }
+            .font(.caption.bold())
+          }
+          .buttonStyle(.borderedProminent)
+          .controlSize(.small)
+          .disabled(cloudSync.isBookSyncing(book.id))
+        }
+        .padding(12)
+        .background(DS.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
+        .overlay(
+          RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
             .stroke(DS.Colors.border, lineWidth: 1)
         )
       }

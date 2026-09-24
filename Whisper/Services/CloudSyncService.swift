@@ -109,6 +109,71 @@ final class CloudSyncService: ObservableObject {
     @Published var isSyncing: Bool = false
     @Published var iCloudDriveURL: URL? = nil
     @Published var cloudBookFiles: [URL] = []
+    @Published var syncingBookIDs: Set<UUID> = []
+    @Published var bookSyncErrors: [UUID: String] = [:]
+    
+    func isBookSyncing(_ id: UUID) -> Bool {
+        syncingBookIDs.contains(id)
+    }
+    
+    func markBookSyncing(_ id: UUID) {
+        syncingBookIDs.insert(id)
+        bookSyncErrors.removeValue(forKey: id)
+    }
+    
+    func unmarkBookSyncing(_ id: UUID, error: String? = nil) {
+        syncingBookIDs.remove(id)
+        if let error = error {
+            bookSyncErrors[id] = error
+        } else {
+            bookSyncErrors.removeValue(forKey: id)
+        }
+    }
+    
+    func syncStatus(for book: Book) -> BookSyncStatus {
+        if syncingBookIDs.contains(book.id) {
+            return .syncing
+        }
+        if let err = bookSyncErrors[book.id] ?? book.cloudSyncError, !err.isEmpty {
+            return .failed(err)
+        }
+        if book.isCloudSynced {
+            return .synced
+        }
+        if activeProvider != .disabled {
+            return .pending
+        }
+        return .localOnly
+    }
+    
+    func syncSingleBook(_ book: Book) async {
+        guard let url = book.resolvedURL else { return }
+        markBookSyncing(book.id)
+        
+        if activeProvider == .googleDrive {
+            do {
+                let fileId = try await GoogleDriveSyncService.shared.uploadBookDirect(fileURL: url)
+                book.cloudFileID = fileId
+                book.isCloudSynced = true
+                book.cloudSyncError = nil
+                book.cloudSyncDate = Date()
+                unmarkBookSyncing(book.id)
+                await GoogleDriveSyncService.shared.syncProgressDirect(localBooks: [book])
+            } catch {
+                let msg = error.localizedDescription
+                book.cloudSyncError = msg
+                unmarkBookSyncing(book.id, error: msg)
+            }
+        } else if activeProvider == .iCloud {
+            uploadBookToCloud(fileURL: url)
+            book.isCloudSynced = true
+            book.cloudSyncError = nil
+            book.cloudSyncDate = Date()
+            unmarkBookSyncing(book.id)
+        } else {
+            unmarkBookSyncing(book.id)
+        }
+    }
     
     /// Resolves the actual sync provider in effect
     var activeProvider: ProviderPreference {

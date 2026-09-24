@@ -10,6 +10,7 @@ import SwiftUI
 struct BookCoverView: View {
     let book: Book
     var showMetadata: Bool = true
+    @ObservedObject private var cloudSync = CloudSyncService.shared
     
     private var coverBackground: Color {
         DS.Colors.cardBackground
@@ -76,9 +77,53 @@ struct BookCoverView: View {
                         .stroke(DS.Colors.border, lineWidth: 0.5)
                 )
                 .padding(8)
+            
+            // Cloud Sync Status badge at top-left
+            cloudSyncBadge
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(8)
         }
     }
     
+    @ViewBuilder
+    private var cloudSyncBadge: some View {
+        if cloudSync.activeProvider != .disabled {
+            let status = cloudSync.syncStatus(for: book)
+            switch status {
+            case .syncing:
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(DS.Colors.accent)
+                    .padding(4)
+                    .background(.ultraThinMaterial)
+                    .clipShape(Circle())
+            case .synced:
+                Image(systemName: "checkmark.icloud.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(.green)
+                    .padding(4)
+                    .background(.ultraThinMaterial)
+                    .clipShape(Circle())
+            case .failed:
+                Image(systemName: "exclamationmark.icloud.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(.orange)
+                    .padding(4)
+                    .background(.ultraThinMaterial)
+                    .clipShape(Circle())
+            case .pending:
+                Image(systemName: "icloud.and.arrow.up")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.secondary)
+                    .padding(4)
+                    .background(.ultraThinMaterial)
+                    .clipShape(Circle())
+            case .localOnly:
+                EmptyView()
+            }
+        }
+    }
+
     private var coverPlaceholder: some View {
         Rectangle()
             .fill(coverBackground)

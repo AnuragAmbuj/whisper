@@ -427,22 +427,23 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
         }
     }
     
-    /// Uploads a book file directly to Google Drive via multipart upload
-    func uploadBookDirect(fileURL: URL) async throws {
+    /// Uploads a book file directly to Google Drive using Resumable Upload (supports any file size reliably)
+    @discardableResult
+    func uploadBookDirect(fileURL: URL) async throws -> String {
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &isDir), !isDir.boolValue else {
-            return
+            throw NSError(domain: "GoogleDriveSync", code: 404, userInfo: [NSLocalizedDescriptionKey: "Book file not found on disk."])
         }
         
         var token = try await getValidAccessToken()
         let fileName = fileURL.lastPathComponent
         
-        // 1. Check if file already exists in Drive (by name)
+        // 1. SMART CHECK: Check if file already exists in Drive (by name)
         var checkComponents = URLComponents(string: driveFilesURLString)!
         let escapedFileName = fileName.replacingOccurrences(of: "'", with: "\\'")
         checkComponents.queryItems = [
             URLQueryItem(name: "q", value: "name = '\(escapedFileName)' and trashed = false"),
-            URLQueryItem(name: "fields", value: "files(id,name)")
+            URLQueryItem(name: "fields", value: "files(id,name,size)")
         ]
         
         var checkReq = URLRequest(url: checkComponents.url!)
@@ -466,59 +467,70 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
         }
         
         if let checkJson = try? JSONSerialization.jsonObject(with: checkData) as? [String: Any],
-           let files = checkJson["files"] as? [[String: Any]], !files.isEmpty {
-            // Already uploaded to Google Drive
-            return
+           let files = checkJson["files"] as? [[String: Any]],
+           let first = files.first,
+           let existingId = first["id"] as? String {
+            // Book already synced and verified on Google Drive!
+            print("GoogleDriveSync: x27\(fileName)x27 already exists in Google Drive (ID: \(existingId)). Skipping upload.")
+            return existingId
         }
         
         let folderId = try? await getOrCreateWhisperFolder(token: token)
+        let fileAttributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let fileSize = (fileAttributes[.size] as? Int64) ?? 0
+        let fileMime = mimeType(for: fileURL.pathExtension)
         
-        // 2. Perform multipart upload
-        guard let uploadURL = URL(string: "\(driveUploadURLString)?uploadType=multipart") else { return }
-        let boundary = "WhisperBoundary\(UUID().uuidString)"
+        // 2. Initiate Resumable Upload Session (eliminates 5MB limit and handles large files)
+        guard let initURL = URL(string: "\(driveUploadURLString)?uploadType=resumable") else {
+            throw NSError(domain: "GoogleDriveSync", code: 400, userInfo: [NSLocalizedDescriptionKey: "Invalid upload URL"])
+        }
         
-        var uploadReq = URLRequest(url: uploadURL)
-        uploadReq.httpMethod = "POST"
-        uploadReq.timeoutInterval = 120
-        uploadReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        uploadReq.setValue("multipart/related; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        var initReq = URLRequest(url: initURL)
+        initReq.httpMethod = "POST"
+        initReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        initReq.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+        initReq.setValue(fileMime, forHTTPHeaderField: "X-Upload-Content-Type")
+        initReq.setValue("\(fileSize)", forHTTPHeaderField: "X-Upload-Content-Length")
         
         var metadata: [String: Any] = ["name": fileName]
         if let fId = folderId, !fId.isEmpty {
             metadata["parents"] = [fId]
         }
+        initReq.httpBody = try JSONSerialization.data(withJSONObject: metadata)
         
-        let metadataData = try JSONSerialization.data(withJSONObject: metadata)
-        let fileData = try Data(contentsOf: fileURL)
-        let fileMime = mimeType(for: fileURL.pathExtension)
-        
-        var body = Data()
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Type: application/json; charset=UTF-8\r\n\r\n".data(using: .utf8)!)
-        body.append(metadataData)
-        body.append("\r\n".data(using: .utf8)!)
-        
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Type: \(fileMime)\r\n\r\n".data(using: .utf8)!)
-        body.append(fileData)
-        body.append("\r\n".data(using: .utf8)!)
-        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
-        
-        uploadReq.httpBody = body
-        
-        let (uploadData, uploadResp) = try await URLSession.shared.data(for: uploadReq)
-        guard let http = uploadResp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            let status = (uploadResp as? HTTPURLResponse)?.statusCode ?? -1
-            let errString = String(data: uploadData, encoding: .utf8) ?? "HTTP \(status)"
+        let (initData, initResp) = try await URLSession.shared.data(for: initReq)
+        guard let httpInit = initResp as? HTTPURLResponse, (200...299).contains(httpInit.statusCode),
+              let locationString = httpInit.value(forHTTPHeaderField: "Location") ?? (httpInit.allHeaderFields["Location"] as? String),
+              let uploadLocationURL = URL(string: locationString) else {
+            let status = (initResp as? HTTPURLResponse)?.statusCode ?? -1
+            let errString = String(data: initData, encoding: .utf8) ?? "HTTP \(status)"
             if status == 403 && (errString.contains("ACCESS_TOKEN_SCOPE_INSUFFICIENT") || errString.contains("insufficient authentication scopes")) {
                 await MainActor.run {
                     self.signOutDirectAccount()
                     self.lastErrorMessage = "Google Drive permission is missing. Please sign in again and ensure the Google Drive checkbox is selected on the consent screen."
                 }
             }
+            throw NSError(domain: "GoogleDriveSync", code: status, userInfo: [NSLocalizedDescriptionKey: "Upload session failed (\(status)): \(errString)"])
+        }
+        
+        // 3. Upload file content directly from disk
+        var putReq = URLRequest(url: uploadLocationURL)
+        putReq.httpMethod = "PUT"
+        putReq.timeoutInterval = 300
+        putReq.setValue("\(fileSize)", forHTTPHeaderField: "Content-Length")
+        putReq.setValue(fileMime, forHTTPHeaderField: "Content-Type")
+        
+        let (uploadData, uploadResp) = try await URLSession.shared.upload(for: putReq, fromFile: fileURL)
+        guard let http = uploadResp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+              let json = try? JSONSerialization.jsonObject(with: uploadData) as? [String: Any],
+              let newFileId = json["id"] as? String else {
+            let status = (uploadResp as? HTTPURLResponse)?.statusCode ?? -1
+            let errString = String(data: uploadData, encoding: .utf8) ?? "HTTP \(status)"
             throw NSError(domain: "GoogleDriveSync", code: status, userInfo: [NSLocalizedDescriptionKey: "Upload failed (\(status)): \(errString)"])
         }
-        print("GoogleDriveSync: Successfully uploaded '\(fileName)' directly to Google Drive.")
+        
+        print("GoogleDriveSync: Successfully uploaded x27\(fileName)x27 directly to Google Drive (ID: \(newFileId)).")
+        return newFileId
     }
     
     /// Synchronizes reading progress and bookmarks via `whisper_sync.json` directly in Google Drive
@@ -832,13 +844,33 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
             do {
                 // 1. Upload local books
                 for book in existingBooks {
-                    if let url = book.resolvedURL {
-                        self.syncStatusMessage = "Uploading \(book.title)..."
-                        do {
-                            try await uploadBookDirect(fileURL: url)
-                        } catch {
-                            print("GoogleDriveSync: Non-fatal upload notice for \(book.title): \(error.localizedDescription)")
+                    guard let url = book.resolvedURL else { continue }
+                    
+                    // SMART DETERMINATION: Skip if already synced and verified
+                    if book.isCloudSynced && book.cloudFileID != nil && book.cloudSyncError == nil {
+                        continue
+                    }
+                    
+                    await MainActor.run {
+                        CloudSyncService.shared.markBookSyncing(book.id)
+                    }
+                    self.syncStatusMessage = "Uploading \(book.title)..."
+                    do {
+                        let fileId = try await uploadBookDirect(fileURL: url)
+                        await MainActor.run {
+                            book.cloudFileID = fileId
+                            book.isCloudSynced = true
+                            book.cloudSyncError = nil
+                            book.cloudSyncDate = Date()
+                            CloudSyncService.shared.unmarkBookSyncing(book.id)
                         }
+                    } catch {
+                        let errMsg = error.localizedDescription
+                        await MainActor.run {
+                            book.cloudSyncError = errMsg
+                            CloudSyncService.shared.unmarkBookSyncing(book.id, error: errMsg)
+                        }
+                        print("GoogleDriveSync: Upload notice for \(book.title): \(errMsg)")
                     }
                 }
                 

@@ -7,6 +7,7 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+import SwiftData
 
 struct CloudSyncSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -16,6 +17,7 @@ struct CloudSyncSheet: View {
     @State private var isPickingFolder = false
     @State private var isAuthenticating = false
     @State private var syncNotice: String? = nil
+    @Query(sort: \Book.lastReadDate, order: .reverse) private var allBooks: [Book]
     
     var body: some View {
         NavigationStack {
@@ -220,6 +222,66 @@ struct CloudSyncSheet: View {
                     }
                 }
                 
+                // MARK: - Per-Book Sync Status
+                if cloudSync.activeProvider != .disabled && !allBooks.isEmpty {
+                    Section("Library Books Sync Status (\(allBooks.count))") {
+                        ForEach(allBooks) { book in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(book.title)
+                                        .font(.subheadline.weight(.medium))
+                                        .lineLimit(1)
+                                    if let err = cloudSync.bookSyncErrors[book.id] ?? book.cloudSyncError {
+                                        Text(err)
+                                            .font(.caption2)
+                                            .foregroundColor(.red)
+                                            .lineLimit(2)
+                                    } else {
+                                        Text(book.author.isEmpty ? (book.format ?? .text).rawValue.uppercased() : book.author)
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                
+                                Spacer()
+                                
+                                let status = cloudSync.syncStatus(for: book)
+                                switch status {
+                                case .syncing:
+                                    ProgressView()
+                                        .controlSize(.mini)
+                                case .synced:
+                                    Label("Synced", systemImage: "checkmark.circle.fill")
+                                        .font(.caption.bold())
+                                        .foregroundColor(.green)
+                                case .failed:
+                                    Button("Retry") {
+                                        Task {
+                                            await cloudSync.syncSingleBook(book)
+                                        }
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.mini)
+                                    .tint(.orange)
+                                case .pending:
+                                    Button("Upload") {
+                                        Task {
+                                            await cloudSync.syncSingleBook(book)
+                                        }
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.mini)
+                                case .localOnly:
+                                    Text("Local")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
+
                 // MARK: - Manual Sync Section
                 Section {
                     Button(action: {
