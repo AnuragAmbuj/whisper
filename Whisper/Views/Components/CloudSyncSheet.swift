@@ -98,20 +98,31 @@ struct CloudSyncSheet: View {
                                     .foregroundColor(.secondary)
                                 
                                 Button(action: handleDirectGoogleSignIn) {
-                                    HStack(spacing: 8) {
+                                    HStack(spacing: 10) {
                                         if isAuthenticating {
                                             ProgressView()
+                                                .tint(.white)
                                                 .controlSize(.small)
                                             Text("Signing in with Google...")
+                                                .font(.body.weight(.semibold))
+                                                .foregroundColor(.white)
                                         } else {
                                             Image(systemName: "person.badge.key.fill")
+                                                .font(.body.weight(.semibold))
+                                                .foregroundColor(.white)
                                             Text("Sign in with Google")
+                                                .font(.body.weight(.semibold))
+                                                .foregroundColor(.white)
                                         }
                                     }
                                     .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .fill(Color(red: 0.26, green: 0.52, blue: 0.96)) // Google Blue #4285F4
+                                    )
                                 }
-                                .buttonStyle(.borderedProminent)
-                                .controlSize(.regular)
+                                .buttonStyle(.plain)
                                 .disabled(isAuthenticating)
                             }
                             .padding(.vertical, 4)
@@ -199,7 +210,7 @@ struct CloudSyncSheet: View {
                             syncNotice = "Sync completed successfully."
                         }
                     }) {
-                        HStack {
+                        HStack(spacing: 8) {
                             if cloudSync.isSyncing {
                                 ProgressView()
                                     .controlSize(.small)
@@ -207,11 +218,12 @@ struct CloudSyncSheet: View {
                                 Text(googleDrive.syncStatusMessage ?? "Syncing...")
                             } else {
                                 Image(systemName: "arrow.triangle.2.circlepath")
-                                Text("Sync Now")
+                            Text("Sync Now")
                             }
                         }
                         .frame(maxWidth: .infinity)
                         .font(.body.weight(.semibold))
+                        .foregroundColor(cloudSync.activeProvider == .disabled ? .secondary : .accentColor)
                     }
                     .disabled(cloudSync.isSyncing || cloudSync.activeProvider == .disabled)
                     
