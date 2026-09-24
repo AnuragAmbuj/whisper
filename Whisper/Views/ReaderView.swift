@@ -19,6 +19,7 @@ struct ReaderView: View {
   @State private var pageIndex: Int = 0
   @State private var totalPages: Int = 1
   @State private var showSmartFind = false
+  @State private var showAIInsights = false
 
   init(book: Book) {
     _viewModel = State(wrappedValue: ReaderViewModel(book: book))
@@ -141,6 +142,21 @@ struct ReaderView: View {
 
             // Trailing Actions
             HStack(spacing: DS.Spacing.sm) {
+              Button(action: { showAIInsights = true }) {
+                Image(systemName: "sparkles")
+                  .font(.system(size: 14, weight: .semibold))
+                  .foregroundColor(viewModel.theme.textColor)
+                  .frame(width: 38, height: 38)
+                  .background(.ultraThinMaterial)
+                  .clipShape(Circle())
+                  .overlay(
+                    Circle()
+                      .stroke(viewModel.theme.textColor.opacity(0.12), lineWidth: 1)
+                  )
+              }
+              .buttonStyle(.plain)
+              .help("Apple Intelligence Reading Insights")
+
               Button(action: { showSmartFind = true }) {
                 Image(systemName: "sparkle.magnifyingglass")
                   .font(.system(size: 14, weight: .semibold))
@@ -248,6 +264,11 @@ struct ReaderView: View {
               Image(systemName: "xmark.circle")
             }
             Divider()
+            Button(action: { showAIInsights = true }) {
+              Image(systemName: "sparkles")
+            }
+            .help("Apple Intelligence Reading Insights")
+
             Button(action: { showSmartFind = true }) {
               Image(systemName: "sparkle.magnifyingglass")
             }
@@ -278,6 +299,12 @@ struct ReaderView: View {
     }
     .sheet(isPresented: $showSmartFind) {
       SmartFindSheet(book: viewModel.book, theme: viewModel.theme)
+    }
+    .sheet(isPresented: $showAIInsights) {
+      AIReaderInsightsSheet(book: viewModel.book)
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .whisperToggleBookmark)) { _ in
+      viewModel.toggleBookmark()
     }
     .onDisappear {
       try? modelContext.save()

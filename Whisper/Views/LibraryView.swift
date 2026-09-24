@@ -17,6 +17,7 @@ struct LibraryView: View {
   @State private var importErrorMessage: String?
   @State private var hoveredCategory: String? = nil
   @State private var showSyncSheet = false
+  @State private var showCameraScanner = false
   @ObservedObject private var cloudSync = CloudSyncService.shared
   @Query var books: [Book]
   @Environment(\.modelContext) private var modelContext
@@ -111,7 +112,15 @@ struct LibraryView: View {
               Image(systemName: "arrow.clockwise")
             }
 
-            Button(action: { isImporting = true }) {
+            Menu {
+              Button(action: { isImporting = true }) {
+                Label("Import Digital Book...", systemImage: "square.and.arrow.down")
+              }
+              
+              Button(action: { showCameraScanner = true }) {
+                Label("Scan Physical Book...", systemImage: "camera.viewfinder")
+              }
+            } label: {
               Image(systemName: "plus")
             }
             .disabled(isProcessingImport)
@@ -127,6 +136,9 @@ struct LibraryView: View {
       }
       .sheet(isPresented: $showSyncSheet) {
         CloudSyncSheet()
+      }
+      .sheet(isPresented: $showCameraScanner) {
+        PhysicalBookScannerView()
       }
       .alert("Import Notice", isPresented: $showImportError) {
         Button("OK", role: .cancel) {}

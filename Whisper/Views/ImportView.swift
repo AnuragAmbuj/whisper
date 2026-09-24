@@ -15,6 +15,7 @@ struct ImportView: View {
     @State private var importMessage: String?
     @State private var showAlert = false
     @State private var isTargetedForDrop = false
+    @State private var showCameraScanner = false
     
     @ObservedObject private var cloudSync = CloudSyncService.shared
     
@@ -71,6 +72,9 @@ struct ImportView: View {
         } message: {
             Text(importMessage ?? "Operation completed.")
         }
+        .sheet(isPresented: $showCameraScanner) {
+            PhysicalBookScannerView()
+        }
     }
     
     private var systemBackground: Color {
@@ -116,26 +120,42 @@ struct ImportView: View {
                     .padding(.horizontal, DS.Spacing.md)
             }
             
-            Button(action: { isImporting = true }) {
-                HStack(spacing: 8) {
-                    if isProcessing {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(DS.Colors.onSelection)
-                    } else {
-                        Image(systemName: "plus.circle.fill")
+            VStack(spacing: DS.Spacing.sm) {
+                Button(action: { isImporting = true }) {
+                    HStack(spacing: 8) {
+                        if isProcessing {
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(DS.Colors.onSelection)
+                        } else {
+                            Image(systemName: "plus.circle.fill")
+                        }
+                        Text(isProcessing ? "Importing..." : "Choose File to Import")
                     }
-                    Text(isProcessing ? "Importing..." : "Choose File to Import")
+                    .font(.headline.weight(.semibold))
+                    .foregroundColor(DS.Colors.onSelection)
+                    .frame(maxWidth: 320)
+                    .padding(.vertical, 12)
+                    .background(Color.primary)
+                    .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
                 }
-                .font(.headline.weight(.semibold))
-                .foregroundColor(DS.Colors.onSelection)
-                .frame(maxWidth: 320)
-                .padding(.vertical, 12)
-                .background(Color.primary)
-                .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
+                .buttonStyle(.plain)
+                .disabled(isProcessing)
+
+                Button(action: { showCameraScanner = true }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "camera.viewfinder")
+                        Text("Scan Physical Book (OCR)")
+                    }
+                    .font(.subheadline.weight(.medium))
+                    .foregroundColor(.primary)
+                    .frame(maxWidth: 320)
+                    .padding(.vertical, 11)
+                    .background(subcardBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
-            .disabled(isProcessing)
         }
         .padding(DS.Spacing.xxl)
         .frame(maxWidth: .infinity)

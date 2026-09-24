@@ -47,18 +47,27 @@ class BookService {
     fetchAllBooks().first
   }
 
-  // MARK: - CoreSpotlight Semantic Indexing
+  // MARK: - CoreSpotlight Semantic Indexing (Apple Intelligence Search)
   func indexBookInSpotlight(_ book: Book) {
     #if canImport(CoreSpotlight)
     let attributeSet = CSSearchableItemAttributeSet(contentType: .item)
     attributeSet.title = book.title
     attributeSet.creator = book.author
-    attributeSet.contentDescription = "\(book.format?.displayName ?? "Book") • \(book.author)"
-    attributeSet.keywords = [book.title, book.author, book.format?.displayName ?? ""]
+    attributeSet.contentDescription = "\(book.format?.displayName ?? "Book") by \(book.author)"
+    
+    // Rich semantic keywords and excerpt for Apple Intelligence Spotlight search
+    var keywords = [book.title, book.author, book.format?.displayName ?? ""]
+    if !book.content.isEmpty {
+      let preview = String(book.content.prefix(300))
+      attributeSet.textContent = preview
+      let sampleWords = preview.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0.count > 4 }
+      keywords.append(contentsOf: Set(sampleWords).prefix(15))
+    }
+    attributeSet.keywords = Array(Set(keywords))
 
     let item = CSSearchableItem(
       uniqueIdentifier: book.id.uuidString,
-      domainIdentifier: "com.anuragambuj.whisper.books",
+      domainIdentifier: "club.ironlattice.whisper.books",
       attributeSet: attributeSet
     )
     CSSearchableIndex.default().indexSearchableItems([item]) { error in

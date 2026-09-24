@@ -13,6 +13,7 @@ extension Notification.Name {
     static let whisperOpenFile = Notification.Name("whisperOpenFile")
     static let whisperOpenBookById = Notification.Name("whisperOpenBookById")
     static let whisperResumeReading = Notification.Name("whisperResumeReading")
+    static let whisperToggleBookmark = Notification.Name("whisperToggleBookmark")
 }
 
 final class FileOpenManager: ObservableObject {

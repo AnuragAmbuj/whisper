@@ -168,4 +168,36 @@ struct TypeSafeAndIntentsTests {
         let resolved = book.resolveSearchableContent()
         #expect(resolved.contains("truth universally acknowledged"))
     }
+
+    @Test func testAISummarizerServiceInsights() async throws {
+        let sample = """
+        The Time Traveller was expounding a recondite matter to us. His grey eyes shone and twinkled, and his usually pale face was flushed and animated. The fire burned brightly, and the soft radiance of the incandescent lights in the lilies of silver caught the bubbles that flashed and passed in our glasses. Our chairs, being his patents, embraced and caressed us rather than submitted to be sat upon.
+        There was that luxurious after-dinner atmosphere when thought roams gracefully free of the trammels of precision. He put it to us that time is simply a fourth dimension of space. Weena later accompanied him through the world of the Eloi and Morlocks.
+        """
+        let insights = await AISummarizerService.shared.generateInsights(for: sample, bookTitle: "The Time Machine")
+        #expect(!insights.executiveSummary.isEmpty)
+        #expect(insights.wordCount > 50)
+        #expect(insights.estimatedReadMinutes >= 1)
+        #expect(!insights.toneAndMood.isEmpty)
+        #expect(insights.characters.contains { $0.name.contains("Time Traveller") || $0.name.contains("Weena") })
+    }
+
+    @Test func testAppleIntelligenceIntentsExecution() async throws {
+        let intent = GetCurrentReadingBookIntent()
+        let result = try await intent.perform()
+        // Should execute and produce a valid localized dialog
+        #expect(result != nil)
+    }
+
+    @Test func testSpotlightAppleIntelligenceIndexing() async throws {
+        let book = Book(
+            title: "Dune",
+            author: "Frank Herbert",
+            content: "A beginning is the time for taking the most delicate care that the balances are correct.",
+            format: .text
+        )
+        // Should index safely without crash or assertion error
+        BookService.shared.indexBookInSpotlight(book)
+        #expect(book.title == "Dune")
+    }
 }
