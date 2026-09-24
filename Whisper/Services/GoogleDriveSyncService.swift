@@ -52,7 +52,7 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
     private let userinfoURLString = "https://www.googleapis.com/oauth2/v3/userinfo"
     private let driveFilesURLString = "https://www.googleapis.com/drive/v3/files"
     private let driveUploadURLString = "https://www.googleapis.com/upload/drive/v3/files"
-    private let driveScope = "https://www.googleapis.com/auth/drive.file email"
+    private let driveScope = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.appdata email openid"
     
     var clientID: String {
         return GoogleDriveConfig.shared.clientID
@@ -156,7 +156,8 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
             URLQueryItem(name: "code_challenge", value: codeChallenge),
             URLQueryItem(name: "code_challenge_method", value: "S256"),
             URLQueryItem(name: "prompt", value: "consent"),
-            URLQueryItem(name: "access_type", value: "offline")
+            URLQueryItem(name: "access_type", value: "offline"),
+            URLQueryItem(name: "include_granted_scopes", value: "true")
         ]
         
         guard let authURL = components.url else {
@@ -236,9 +237,20 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
             let access_token: String
             let refresh_token: String?
             let expires_in: Int
+            let scope: String?
         }
         
         let tokenData = try JSONDecoder().decode(TokenResponse.self, from: data)
+        
+        // Verify that Google actually granted Drive scopes
+        if let granted = tokenData.scope, !granted.contains("drive") {
+            signOutDirectAccount()
+            throw NSError(
+                domain: "GoogleDriveSync",
+                code: 403,
+                userInfo: [NSLocalizedDescriptionKey: "Google Drive permission was not granted. Please sign in again and ensure you check the box for Google Drive on the permissions screen."]
+            )
+        }
         saveKeychainItem(key: kKeychainAccessToken, value: tokenData.access_token)
         if let refresh = tokenData.refresh_token {
             saveKeychainItem(key: kKeychainRefreshToken, value: refresh)
@@ -442,6 +454,15 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
             token = try await getValidAccessToken(forceRefresh: true)
             checkReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             (checkData, checkResp) = try await URLSession.shared.data(for: checkReq)
+        } else if let http = checkResp as? HTTPURLResponse, http.statusCode == 403 {
+            let errString = String(data: checkData, encoding: .utf8) ?? ""
+            if errString.contains("ACCESS_TOKEN_SCOPE_INSUFFICIENT") || errString.contains("insufficient authentication scopes") {
+                await MainActor.run {
+                    self.signOutDirectAccount()
+                    self.lastErrorMessage = "Google Drive permission is missing. Please sign in again and ensure the Google Drive checkbox is selected on the consent screen."
+                }
+                throw NSError(domain: "GoogleDriveSync", code: 403, userInfo: [NSLocalizedDescriptionKey: "Google Drive permission is missing."])
+            }
         }
         
         if let checkJson = try? JSONSerialization.jsonObject(with: checkData) as? [String: Any],
@@ -489,6 +510,12 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
         guard let http = uploadResp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             let status = (uploadResp as? HTTPURLResponse)?.statusCode ?? -1
             let errString = String(data: uploadData, encoding: .utf8) ?? "HTTP \(status)"
+            if status == 403 && (errString.contains("ACCESS_TOKEN_SCOPE_INSUFFICIENT") || errString.contains("insufficient authentication scopes")) {
+                await MainActor.run {
+                    self.signOutDirectAccount()
+                    self.lastErrorMessage = "Google Drive permission is missing. Please sign in again and ensure the Google Drive checkbox is selected on the consent screen."
+                }
+            }
             throw NSError(domain: "GoogleDriveSync", code: status, userInfo: [NSLocalizedDescriptionKey: "Upload failed (\(status)): \(errString)"])
         }
         print("GoogleDriveSync: Successfully uploaded '\(fileName)' directly to Google Drive.")

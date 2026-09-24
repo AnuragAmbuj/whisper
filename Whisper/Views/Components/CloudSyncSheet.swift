@@ -93,9 +93,27 @@ struct CloudSyncSheet: View {
                             .padding(.vertical, 2)
                         } else {
                             VStack(alignment: .leading, spacing: 10) {
-                                Text("Sign in to automatically sync your books, reading progress, and bookmarks with Google Drive.")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
+                                if let error = googleDrive.lastErrorMessage {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "exclamationmark.triangle.fill")
+                                                .foregroundColor(.orange)
+                                            Text("Permission Action Required")
+                                                .font(.caption.bold())
+                                                .foregroundColor(.primary)
+                                        }
+                                        Text(error)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .padding(10)
+                                    .background(Color.orange.opacity(0.12))
+                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                } else {
+                                    Text("Sign in to automatically sync your books, reading progress, and bookmarks with Google Drive.")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
                                 
                                 Button(action: handleDirectGoogleSignIn) {
                                     HStack(spacing: 10) {
