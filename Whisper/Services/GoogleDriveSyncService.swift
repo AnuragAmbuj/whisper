@@ -41,7 +41,6 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
     private let kKeychainAccessToken = "access_token"
     private let kKeychainRefreshToken = "refresh_token"
     private let kUserDefaultsUserEmail = "whisper_gdrive_email"
-    private let kUserDefaultsClientID = "whisper_gdrive_client_id"
     private let kUserDefaultsFolderID = "whisper_gdrive_folder_id"
     private let kLinkedFolderBookmark = "whisper_gdrive_folder_bookmark"
     private let kSyncFileName = "whisper_sync.json"
@@ -53,16 +52,17 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
     private let driveFilesURLString = "https://www.googleapis.com/drive/v3/files"
     private let driveUploadURLString = "https://www.googleapis.com/upload/drive/v3/files"
     private let driveScope = "https://www.googleapis.com/auth/drive.file email"
-    private let redirectURI = "whisper:/oauth2redirect"
     
-    /// User or App OAuth Client ID
     var clientID: String {
-        get {
-            UserDefaults.standard.string(forKey: kUserDefaultsClientID) ?? ""
-        }
-        set {
-            UserDefaults.standard.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: kUserDefaultsClientID)
-        }
+        return GoogleDriveConfig.shared.clientID
+    }
+    
+    var redirectURI: String {
+        return GoogleDriveConfig.shared.redirectURI
+    }
+    
+    var callbackScheme: String {
+        return GoogleDriveConfig.shared.reversedClientID
     }
     
     private var rootFolderID: String? {
@@ -165,10 +165,14 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
         return try await withCheckedThrowingContinuation { continuation in
             let session = ASWebAuthenticationSession(
                 url: authURL,
-                callbackURLScheme: "whisper"
+                callbackURLScheme: callbackScheme
             ) { [weak self] callbackURL, error in
                 if let error = error {
-                    continuation.resume(throwing: error)
+                    if let authErr = error as? ASWebAuthenticationSessionError, authErr.code == .canceledLogin {
+                        continuation.resume(throwing: NSError(domain: "GoogleDriveSync", code: 99, userInfo: [NSLocalizedDescriptionKey: "Google Sign-In was canceled."]))
+                    } else {
+                        continuation.resume(throwing: error)
+                    }
                     return
                 }
                 

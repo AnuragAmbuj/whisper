@@ -14,8 +14,6 @@ struct CloudSyncSheet: View {
     @ObservedObject private var googleDrive = GoogleDriveSyncService.shared
     
     @State private var isPickingFolder = false
-    @State private var showClientIDField = false
-    @State private var clientIDInput = ""
     @State private var isAuthenticating = false
     @State private var syncNotice: String? = nil
     
@@ -65,11 +63,13 @@ struct CloudSyncSheet: View {
                 
                 // MARK: - Google Drive Direct Connection
                 if cloudSync.activeProvider == .googleDrive || cloudSync.providerPreference == .googleDrive {
-                    Section("Direct Google Drive (REST API)") {
+                    Section("Google Drive Account") {
                         if googleDrive.isDirectAPIConnected {
                             HStack {
                                 Image(systemName: "checkmark.seal.fill")
                                     .foregroundColor(.green)
+                                    .font(.title3)
+                                
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("Connected to Google Drive")
                                         .font(.subheadline.weight(.medium))
@@ -79,64 +79,46 @@ struct CloudSyncSheet: View {
                                             .foregroundColor(.secondary)
                                     }
                                 }
+                                
                                 Spacer()
-                                Button("Sign Out", role: .destructive) {
+                                
+                                Button("Disconnect", role: .destructive) {
                                     googleDrive.signOutDirectAccount()
                                     syncNotice = "Disconnected from Google Drive."
                                 }
                                 .font(.caption)
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
                             }
+                            .padding(.vertical, 2)
                         } else {
                             VStack(alignment: .leading, spacing: 10) {
-                                Text("Sign in to sync your library directly with your Google Drive without using the Files app.")
+                                Text("Sign in to automatically sync your books, reading progress, and bookmarks with Google Drive.")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                                 
-                                if showClientIDField {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Google OAuth Client ID")
-                                            .font(.caption.bold())
-                                            .foregroundColor(.secondary)
-                                        TextField("e.g. 12345-abc.apps.googleusercontent.com", text: $clientIDInput)
-                                            .textFieldStyle(.roundedBorder)
-                                            .autocorrectionDisabled()
-                                            #if os(iOS)
-                                            .textInputAutocapitalization(.never)
-                                            #endif
-                                            .font(.system(size: 13, design: .monospaced))
-                                    }
-                                    .padding(.vertical, 4)
-                                }
-                                
-                                HStack(spacing: 12) {
-                                    Button(action: handleDirectGoogleSignIn) {
-                                        HStack {
-                                            if isAuthenticating {
-                                                ProgressView()
-                                                    .controlSize(.small)
-                                            } else {
-                                                Image(systemName: "person.badge.key.fill")
-                                                Text("Sign In with Google")
-                                            }
+                                Button(action: handleDirectGoogleSignIn) {
+                                    HStack(spacing: 8) {
+                                        if isAuthenticating {
+                                            ProgressView()
+                                                .controlSize(.small)
+                                            Text("Signing in with Google...")
+                                        } else {
+                                            Image(systemName: "person.badge.key.fill")
+                                            Text("Sign in with Google")
                                         }
                                     }
-                                    .buttonStyle(.borderedProminent)
-                                    .disabled(isAuthenticating)
-                                    
-                                    Button(action: {
-                                        showClientIDField.toggle()
-                                    }) {
-                                        Image(systemName: "gearshape")
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .help("Configure Google Client ID")
+                                    .frame(maxWidth: .infinity)
                                 }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.regular)
+                                .disabled(isAuthenticating)
                             }
                             .padding(.vertical, 4)
                         }
                     }
                     
-                    // MARK: - Alternative: Linked Folder (Files App)
+                    // MARK: - Alternative: Linked Files App Folder
                     Section("Alternative: Linked Files App Folder") {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
@@ -152,7 +134,7 @@ struct CloudSyncSheet: View {
                                             .font(.caption)
                                             .foregroundColor(.green)
                                     } else {
-                                        Text("Zero-config alternative: Link any Google Drive folder from the Files app.")
+                                        Text("Prefer zero sign-in? Link any folder from Google Drive or Files app.")
                                             .font(.caption)
                                             .foregroundColor(.secondary)
                                     }
@@ -258,15 +240,9 @@ struct CloudSyncSheet: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .onAppear {
-                clientIDInput = googleDrive.clientID
-            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
-                        if !clientIDInput.isEmpty {
-                            googleDrive.clientID = clientIDInput
-                        }
                         dismiss()
                     }
                 }
@@ -293,16 +269,6 @@ struct CloudSyncSheet: View {
     }
     
     private func handleDirectGoogleSignIn() {
-        if !clientIDInput.isEmpty {
-            googleDrive.clientID = clientIDInput
-        }
-        
-        guard !googleDrive.clientID.isEmpty else {
-            showClientIDField = true
-            syncNotice = "Please enter your Google OAuth Client ID to sign in."
-            return
-        }
-        
         isAuthenticating = true
         syncNotice = nil
         Task {
@@ -311,7 +277,7 @@ struct CloudSyncSheet: View {
                 syncNotice = "Successfully connected to Google Drive!"
                 await cloudSync.triggerSync()
             } catch {
-                syncNotice = "Sign In failed: \(error.localizedDescription)"
+                syncNotice = error.localizedDescription
             }
             isAuthenticating = false
         }

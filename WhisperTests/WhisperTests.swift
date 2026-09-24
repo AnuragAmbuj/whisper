@@ -494,4 +494,12 @@ struct WhisperTests {
         // Restore
         syncService.providerPreference = original
     }
+
+    @Test func testGoogleDriveConfigSecurity() async throws {
+        let config = GoogleDriveConfig.shared
+        #expect(!config.clientID.isEmpty)
+        #expect(config.clientID.contains(".apps.googleusercontent.com"))
+        #expect(config.reversedClientID.starts(with: "com.googleusercontent.apps."))
+        #expect(config.redirectURI.contains(":/oauth2redirect"))
+    }
 }

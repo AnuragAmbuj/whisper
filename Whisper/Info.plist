@@ -15,7 +15,19 @@
 				<string>club.ironlattice.whisper</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>Google OAuth Redirect</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.1082648291048-vh7q0d81bql523vupn61g108k1fpm60u</string>
+			</array>
+		</dict>
 	</array>
+	<key>GIDClientID</key>
+	<string>1082648291048-vh7q0d81bql523vupn61g108k1fpm60u.apps.googleusercontent.com</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIconName</key>
