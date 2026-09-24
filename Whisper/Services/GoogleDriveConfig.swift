@@ -20,15 +20,15 @@ final class GoogleDriveConfig: @unchecked Sendable {
     // Obfuscation salt & key for built-in Whisper OAuth Client ID
     private let salt: [UInt8] = Array("WhisperGDriveOAuth2".utf8)
     private let scrambledClientID: [UInt8] = [
-        38, 77, 81, 79, 97, 85, 87, 86, 73, 76, 75, 78, 107, 72, 85, 74,
-        83, 70, 77, 97, 87, 94, 88, 81, 91, 64, 73, 91, 74, 89, 87, 83,
-        93, 72, 79, 78, 114, 83, 66, 66, 65, 93, 85, 93, 87, 82, 84, 83,
-        65, 80, 83, 84, 85, 82, 91, 89, 76, 74, 87, 83, 79, 81, 65, 80,
-        83, 84, 85, 82, 91, 89, 76, 74
+        98, 93, 95, 67, 66, 84, 68, 113, 114, 65, 94, 79, 72, 63, 36, 30,
+        69, 9, 3, 51, 29, 13, 6, 66, 3, 70, 127, 115, 66, 14, 16, 80,
+        120, 42, 65, 5, 29, 90, 50, 9, 26, 6, 3, 22, 6, 105, 37, 2,
+        25, 5, 75, 40, 46, 26, 19, 4, 87, 34, 27, 12, 1, 19, 10, 28,
+        51, 33, 28, 29, 88, 6, 32, 44
     ]
     
     // Fallback bundled client ID for Whisper
-    private let defaultBundledClientID = "1082648291048-vh7q0d81bql523vupn61g108k1fpm60u.apps.googleusercontent.com"
+    private let defaultBundledClientID = "556021666379-pek1a1dudu2f4870gf57k4quheasusst.apps.googleusercontent.com"
     
     private init() {}
     
