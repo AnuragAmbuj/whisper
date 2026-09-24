@@ -42,6 +42,7 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
     private let kKeychainRefreshToken = "refresh_token"
     private let kUserDefaultsUserEmail = "whisper_gdrive_email"
     private let kUserDefaultsFolderID = "whisper_gdrive_folder_id"
+    private let kUserDefaultsTokenExpiry = "whisper_gdrive_token_expiry"
     private let kLinkedFolderBookmark = "whisper_gdrive_folder_bookmark"
     private let kSyncFileName = "whisper_sync.json"
     
@@ -139,7 +140,7 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
             throw NSError(
                 domain: "GoogleDriveSync",
                 code: 101,
-                userInfo: [NSLocalizedDescriptionKey: "Please enter your Google Cloud OAuth Client ID in Settings."]
+                userInfo: [NSLocalizedDescriptionKey: "Google OAuth credentials not configured."]
             )
         }
         
@@ -182,8 +183,7 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
                     continuation.resume(throwing: NSError(
                         domain: "GoogleDriveSync",
                         code: 103,
-                        userInfo: [NSLocalizedDescriptionKey: "Missing authorization code from Google."]
-                    ))
+                        userInfo: [NSLocalizedDescriptionKey: "Missing authorization code from Google."]))
                     return
                 }
                 
@@ -244,6 +244,9 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
             saveKeychainItem(key: kKeychainRefreshToken, value: refresh)
         }
         
+        let expiryDate = Date().addingTimeInterval(Double(max(tokenData.expires_in - 120, 60))).timeIntervalSince1970
+        UserDefaults.standard.set(expiryDate, forKey: kUserDefaultsTokenExpiry)
+        
         // Fetch user profile email
         await fetchUserProfile(accessToken: tokenData.access_token)
         self.isDirectAPIConnected = true
@@ -270,6 +273,9 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
         if let token = getKeychainItem(key: kKeychainAccessToken), !token.isEmpty {
             self.directUserEmail = UserDefaults.standard.string(forKey: kUserDefaultsUserEmail)
             self.isDirectAPIConnected = true
+        } else if let refreshToken = getKeychainItem(key: kKeychainRefreshToken), !refreshToken.isEmpty {
+            self.directUserEmail = UserDefaults.standard.string(forKey: kUserDefaultsUserEmail)
+            self.isDirectAPIConnected = true
         }
     }
     
@@ -279,18 +285,25 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
         deleteKeychainItem(key: kKeychainRefreshToken)
         UserDefaults.standard.removeObject(forKey: kUserDefaultsUserEmail)
         UserDefaults.standard.removeObject(forKey: kUserDefaultsFolderID)
+        UserDefaults.standard.removeObject(forKey: kUserDefaultsTokenExpiry)
         self.directUserEmail = nil
         self.rootFolderID = nil
         self.isDirectAPIConnected = false
     }
     
-    /// Gets a valid access token, auto-refreshing via refresh_token if needed
-    private func getValidAccessToken() async throws -> String {
-        if let token = getKeychainItem(key: kKeychainAccessToken), !token.isEmpty {
+    /// Gets a valid access token, auto-refreshing via refresh_token if expired
+    private func getValidAccessToken(forceRefresh: Bool = false) async throws -> String {
+        let expiryTimestamp = UserDefaults.standard.double(forKey: kUserDefaultsTokenExpiry)
+        let isExpired = Date().timeIntervalSince1970 >= expiryTimestamp
+        
+        if !forceRefresh && !isExpired, let token = getKeychainItem(key: kKeychainAccessToken), !token.isEmpty {
             return token
         }
         
         guard let refreshToken = getKeychainItem(key: kKeychainRefreshToken), !refreshToken.isEmpty else {
+            if let token = getKeychainItem(key: kKeychainAccessToken), !token.isEmpty {
+                return token
+            }
             throw NSError(domain: "GoogleDriveSync", code: 401, userInfo: [NSLocalizedDescriptionKey: "Please sign in to Google Drive."])
         }
         
@@ -321,9 +334,15 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
         
         struct RefreshResponse: Codable {
             let access_token: String
+            let expires_in: Int?
         }
         let refreshed = try JSONDecoder().decode(RefreshResponse.self, from: data)
         saveKeychainItem(key: kKeychainAccessToken, value: refreshed.access_token)
+        
+        let expiresIn = refreshed.expires_in ?? 3600
+        let newExpiry = Date().addingTimeInterval(Double(max(expiresIn - 120, 60))).timeIntervalSince1970
+        UserDefaults.standard.set(newExpiry, forKey: kUserDefaultsTokenExpiry)
+        
         return refreshed.access_token
     }
     
@@ -331,7 +350,7 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
     
     /// Finds or creates the "Whisper Library" root folder in Google Drive
     private func getOrCreateWhisperFolder(token: String) async throws -> String {
-        if let existing = self.rootFolderID {
+        if let existing = self.rootFolderID, !existing.isEmpty {
             return existing
         }
         
@@ -339,14 +358,16 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
         var components = URLComponents(string: driveFilesURLString)!
         components.queryItems = [
             URLQueryItem(name: "q", value: "name = 'Whisper Library' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"),
-            URLQueryItem(name: "fields", value: "files(id, name)")
+            URLQueryItem(name: "fields", value: "files(id,name)"),
+            URLQueryItem(name: "spaces", value: "drive")
         ]
         
         var searchReq = URLRequest(url: components.url!)
         searchReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         
-        let (data, _) = try await URLSession.shared.data(for: searchReq)
-        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let (data, searchResp) = try await URLSession.shared.data(for: searchReq)
+        if let http = searchResp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let files = json["files"] as? [[String: Any]],
            let first = files.first,
            let id = first["id"] as? String {
@@ -354,7 +375,7 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
             return id
         }
         
-        // 2. Create folder
+        // 2. Create folder if not found
         guard let createURL = URL(string: driveFilesURLString) else {
             throw NSError(domain: "GoogleDriveSync", code: 500, userInfo: [NSLocalizedDescriptionKey: "Invalid drive files URL"])
         }
@@ -374,52 +395,81 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
         guard let httpResp = createResp as? HTTPURLResponse, (200...299).contains(httpResp.statusCode),
               let createdJson = try? JSONSerialization.jsonObject(with: createData) as? [String: Any],
               let newID = createdJson["id"] as? String else {
-            throw NSError(domain: "GoogleDriveSync", code: 501, userInfo: [NSLocalizedDescriptionKey: "Failed to create 'Whisper Library' folder."])
+            let errorText = String(data: createData, encoding: .utf8) ?? "Failed to create folder"
+            throw NSError(domain: "GoogleDriveSync", code: 501, userInfo: [NSLocalizedDescriptionKey: errorText])
         }
         
         self.rootFolderID = newID
         return newID
     }
     
+    private func mimeType(for pathExtension: String) -> String {
+        switch pathExtension.lowercased() {
+        case "epub": return "application/epub+zip"
+        case "pdf": return "application/pdf"
+        case "cbz": return "application/vnd.comicbook+zip"
+        case "cbr": return "application/vnd.comicbook-rar"
+        case "txt": return "text/plain"
+        case "md": return "text/markdown"
+        default: return "application/octet-stream"
+        }
+    }
+    
     /// Uploads a book file directly to Google Drive via multipart upload
     func uploadBookDirect(fileURL: URL) async throws {
-        let token = try await getValidAccessToken()
-        let folderId = try await getOrCreateWhisperFolder(token: token)
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &isDir), !isDir.boolValue else {
+            return
+        }
+        
+        var token = try await getValidAccessToken()
         let fileName = fileURL.lastPathComponent
         
-        // Check if file already exists in folder
+        // 1. Check if file already exists in Drive (by name)
         var checkComponents = URLComponents(string: driveFilesURLString)!
         let escapedFileName = fileName.replacingOccurrences(of: "'", with: "\\'")
         checkComponents.queryItems = [
-            URLQueryItem(name: "q", value: "name = '\(escapedFileName)' and '\(folderId)' in parents and trashed = false"),
-            URLQueryItem(name: "fields", value: "files(id, name)")
+            URLQueryItem(name: "q", value: "name = '\(escapedFileName)' and trashed = false"),
+            URLQueryItem(name: "fields", value: "files(id,name)")
         ]
         
         var checkReq = URLRequest(url: checkComponents.url!)
         checkReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        if let (checkData, _) = try? await URLSession.shared.data(for: checkReq),
-           let checkJson = try? JSONSerialization.jsonObject(with: checkData) as? [String: Any],
+        
+        var (checkData, checkResp) = try await URLSession.shared.data(for: checkReq)
+        if let http = checkResp as? HTTPURLResponse, http.statusCode == 401 {
+            // Auto-refresh token and retry
+            token = try await getValidAccessToken(forceRefresh: true)
+            checkReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            (checkData, checkResp) = try await URLSession.shared.data(for: checkReq)
+        }
+        
+        if let checkJson = try? JSONSerialization.jsonObject(with: checkData) as? [String: Any],
            let files = checkJson["files"] as? [[String: Any]], !files.isEmpty {
-            // Already uploaded
+            // Already uploaded to Google Drive
             return
         }
         
-        // Multipart upload
+        let folderId = try? await getOrCreateWhisperFolder(token: token)
+        
+        // 2. Perform multipart upload
         guard let uploadURL = URL(string: "\(driveUploadURLString)?uploadType=multipart") else { return }
         let boundary = "WhisperBoundary\(UUID().uuidString)"
         
         var uploadReq = URLRequest(url: uploadURL)
         uploadReq.httpMethod = "POST"
+        uploadReq.timeoutInterval = 120
         uploadReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         uploadReq.setValue("multipart/related; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         
-        let metadata: [String: Any] = [
-            "name": fileName,
-            "parents": [folderId]
-        ]
+        var metadata: [String: Any] = ["name": fileName]
+        if let fId = folderId, !fId.isEmpty {
+            metadata["parents"] = [fId]
+        }
         
         let metadataData = try JSONSerialization.data(withJSONObject: metadata)
         let fileData = try Data(contentsOf: fileURL)
+        let fileMime = mimeType(for: fileURL.pathExtension)
         
         var body = Data()
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
@@ -428,29 +478,31 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
         body.append("\r\n".data(using: .utf8)!)
         
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Type: application/octet-stream\r\n\r\n".data(using: .utf8)!)
+        body.append("Content-Type: \(fileMime)\r\n\r\n".data(using: .utf8)!)
         body.append(fileData)
         body.append("\r\n".data(using: .utf8)!)
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
         
         uploadReq.httpBody = body
         
-        let (_, uploadResp) = try await URLSession.shared.data(for: uploadReq)
-        if let http = uploadResp as? HTTPURLResponse, (200...299).contains(http.statusCode) {
-            print("GoogleDriveSync: Successfully uploaded '\(fileName)' directly to Google Drive.")
+        let (uploadData, uploadResp) = try await URLSession.shared.data(for: uploadReq)
+        guard let http = uploadResp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            let status = (uploadResp as? HTTPURLResponse)?.statusCode ?? -1
+            let errString = String(data: uploadData, encoding: .utf8) ?? "HTTP \(status)"
+            throw NSError(domain: "GoogleDriveSync", code: status, userInfo: [NSLocalizedDescriptionKey: "Upload failed (\(status)): \(errString)"])
         }
+        print("GoogleDriveSync: Successfully uploaded '\(fileName)' directly to Google Drive.")
     }
     
     /// Synchronizes reading progress and bookmarks via `whisper_sync.json` directly in Google Drive
     func syncProgressDirect(localBooks: [Book]) async {
-        guard let token = try? await getValidAccessToken(),
-              let folderId = try? await getOrCreateWhisperFolder(token: token) else { return }
+        guard let token = try? await getValidAccessToken() else { return }
         
-        // Search for existing whisper_sync.json
+        // Search for existing whisper_sync.json across all accessible files
         var searchComp = URLComponents(string: driveFilesURLString)!
         searchComp.queryItems = [
-            URLQueryItem(name: "q", value: "name = '\(kSyncFileName)' and '\(folderId)' in parents and trashed = false"),
-            URLQueryItem(name: "fields", value: "files(id, name)")
+            URLQueryItem(name: "q", value: "name = '\(kSyncFileName)' and trashed = false"),
+            URLQueryItem(name: "fields", value: "files(id,name)")
         ]
         
         var searchReq = URLRequest(url: searchComp.url!)
@@ -459,7 +511,8 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
         var syncFileID: String? = nil
         var payload = RemoteSyncPayload()
         
-        if let (sData, _) = try? await URLSession.shared.data(for: searchReq),
+        if let (sData, sResp) = try? await URLSession.shared.data(for: searchReq),
+           let sHTTP = sResp as? HTTPURLResponse, (200...299).contains(sHTTP.statusCode),
            let json = try? JSONSerialization.jsonObject(with: sData) as? [String: Any],
            let files = json["files"] as? [[String: Any]],
            let first = files.first,
@@ -470,7 +523,8 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
             if let downloadURL = URL(string: "\(driveFilesURLString)/\(id)?alt=media") {
                 var downReq = URLRequest(url: downloadURL)
                 downReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-                if let (downData, _) = try? await URLSession.shared.data(for: downReq),
+                if let (downData, downResp) = try? await URLSession.shared.data(for: downReq),
+                   let downHTTP = downResp as? HTTPURLResponse, (200...299).contains(downHTTP.statusCode),
                    let decoded = try? JSONDecoder().decode(RemoteSyncPayload.self, from: downData) {
                     payload = decoded
                 }
@@ -506,7 +560,6 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
         
         // Upload updated payload
         if let fileID = syncFileID {
-            // Update file content
             if let updateURL = URL(string: "https://www.googleapis.com/upload/drive/v3/files/\(fileID)?uploadType=media") {
                 var updateReq = URLRequest(url: updateURL)
                 updateReq.httpMethod = "PATCH"
@@ -516,7 +569,7 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
                 _ = try? await URLSession.shared.data(for: updateReq)
             }
         } else {
-            // Create file
+            let folderId = try? await getOrCreateWhisperFolder(token: token)
             if let createURL = URL(string: "\(driveUploadURLString)?uploadType=multipart") {
                 let boundary = "SyncBoundary\(UUID().uuidString)"
                 var createReq = URLRequest(url: createURL)
@@ -524,10 +577,10 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
                 createReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
                 createReq.setValue("multipart/related; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
                 
-                let metadata: [String: Any] = [
-                    "name": kSyncFileName,
-                    "parents": [folderId]
-                ]
+                var metadata: [String: Any] = ["name": kSyncFileName]
+                if let fId = folderId, !fId.isEmpty {
+                    metadata["parents"] = [fId]
+                }
                 let metaData = (try? JSONSerialization.data(withJSONObject: metadata)) ?? Data()
                 
                 var body = Data()
@@ -548,29 +601,29 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
         }
     }
     
-    /// Queries remote books in Google Drive folder and auto-downloads any missing files
+    /// Queries remote books across Google Drive and auto-downloads any missing files onto this device
     func fetchRemoteBooksDirect(
         existingBooks: [Book],
         onImportNewBook: @escaping (URL) async -> Void
     ) async {
-        guard let token = try? await getValidAccessToken(),
-              let folderId = try? await getOrCreateWhisperFolder(token: token) else { return }
+        guard let token = try? await getValidAccessToken() else { return }
         
         var comp = URLComponents(string: driveFilesURLString)!
         comp.queryItems = [
-            URLQueryItem(name: "q", value: "'\(folderId)' in parents and mimeType != 'application/vnd.google-apps.folder' and trashed = false"),
-            URLQueryItem(name: "fields", value: "files(id, name, mimeType)")
+            URLQueryItem(name: "q", value: "mimeType != 'application/vnd.google-apps.folder' and trashed = false"),
+            URLQueryItem(name: "fields", value: "files(id,name,mimeType,size)"),
+            URLQueryItem(name: "pageSize", value: "100")
         ]
         
         var req = URLRequest(url: comp.url!)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         
-        guard let (data, _) = try? await URLSession.shared.data(for: req),
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let files = json["files"] as? [[String: Any]] else { return }
         
-        let existingFilenames = Set(existingBooks.compactMap { $0.url?.lastPathComponent })
-        let existingTitles = Set(existingBooks.map { $0.title.lowercased() })
+        let existingFilenames = Set(existingBooks.compactMap { $0.url?.lastPathComponent.lowercased() })
         let supportedExtensions = Set(["epub", "pdf", "cbz", "cbr", "txt", "md"])
         
         for file in files {
@@ -582,18 +635,20 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
             let ext = (name as NSString).pathExtension.lowercased()
             guard supportedExtensions.contains(ext) else { continue }
             
-            let titleGuess = (name as NSString).deletingPathExtension.lowercased()
-            if !existingFilenames.contains(name) && !existingTitles.contains(titleGuess) {
-                // Download file
+            if !existingFilenames.contains(name.lowercased()) {
+                self.syncStatusMessage = "Downloading \(name)..."
                 guard let downURL = URL(string: "\(driveFilesURLString)/\(id)?alt=media") else { continue }
                 var downReq = URLRequest(url: downURL)
                 downReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                downReq.timeoutInterval = 120
                 
-                if let (fileContent, _) = try? await URLSession.shared.data(for: downReq) {
+                if let (fileContent, downResp) = try? await URLSession.shared.data(for: downReq),
+                   let downHTTP = downResp as? HTTPURLResponse, (200...299).contains(downHTTP.statusCode) {
                     let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(name)
                     do {
                         try fileContent.write(to: tempURL, options: .atomic)
                         await onImportNewBook(tempURL)
+                        try? FileManager.default.removeItem(at: tempURL)
                     } catch {
                         print("GoogleDriveSync: Failed to save downloaded book '\(name)': \(error)")
                     }
@@ -656,25 +711,25 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
         }
     }
     
-    func scanLinkedFolderBooks() -> [URL] {
+    private func scanLinkedFolderBooks() -> [URL] {
         guard let folderURL = securityScopedURL else { return [] }
         let accessing = folderURL.startAccessingSecurityScopedResource()
         defer { if accessing { folderURL.stopAccessingSecurityScopedResource() } }
         
-        let supported = Set(["epub", "pdf", "cbz", "cbr", "txt", "md"])
+        let supportedExtensions = Set(["epub", "pdf", "cbz", "cbr", "txt", "md"])
         guard let enumerator = FileManager.default.enumerator(
             at: folderURL,
             includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles]
         ) else { return [] }
         
-        var found: [URL] = []
+        var results: [URL] = []
         while let fileURL = enumerator.nextObject() as? URL {
-            if supported.contains(fileURL.pathExtension.lowercased()) {
-                found.append(fileURL)
+            if supportedExtensions.contains(fileURL.pathExtension.lowercased()) {
+                results.append(fileURL)
             }
         }
-        return found
+        return results
     }
     
     private func readLinkedFolderSyncPayload() -> RemoteSyncPayload? {
@@ -751,17 +806,22 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
                 // 1. Upload local books
                 for book in existingBooks {
                     if let url = book.resolvedURL {
-                        try? await uploadBookDirect(fileURL: url)
+                        self.syncStatusMessage = "Uploading \(book.title)..."
+                        do {
+                            try await uploadBookDirect(fileURL: url)
+                        } catch {
+                            print("GoogleDriveSync: Non-fatal upload notice for \(book.title): \(error.localizedDescription)")
+                        }
                     }
                 }
                 
                 // 2. Discover & download remote books
+                self.syncStatusMessage = "Checking for new books..."
                 await fetchRemoteBooksDirect(existingBooks: existingBooks, onImportNewBook: onImportNewBook)
                 
                 // 3. Sync reading progress & bookmarks
+                self.syncStatusMessage = "Syncing reading progress..."
                 await syncProgressDirect(localBooks: existingBooks)
-            } catch {
-                lastErrorMessage = error.localizedDescription
             }
         } else if isLinkedFolderActive {
             // Linked Folder Sync
@@ -772,13 +832,11 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
             }
             
             let remoteFiles = scanLinkedFolderBooks()
-            let existingFilenames = Set(existingBooks.compactMap { $0.url?.lastPathComponent })
-            let existingTitles = Set(existingBooks.map { $0.title.lowercased() })
+            let existingFilenames = Set(existingBooks.compactMap { $0.url?.lastPathComponent.lowercased() })
             
             for fileURL in remoteFiles {
                 let filename = fileURL.lastPathComponent
-                let titleGuess = fileURL.deletingPathExtension().lastPathComponent.lowercased()
-                if !existingFilenames.contains(filename) && !existingTitles.contains(titleGuess) {
+                if !existingFilenames.contains(filename.lowercased()) {
                     await onImportNewBook(fileURL)
                 }
             }

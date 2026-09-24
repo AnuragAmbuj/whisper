@@ -114,6 +114,9 @@ final class CloudSyncService: ObservableObject {
     var activeProvider: ProviderPreference {
         switch providerPreference {
         case .auto:
+            if GoogleDriveSyncService.shared.isDirectAPIConnected || GoogleDriveSyncService.shared.isLinkedFolderActive {
+                return .googleDrive
+            }
             return EntitlementHelper.isEntitledForiCloud ? .iCloud : .googleDrive
         case .iCloud:
             return .iCloud
@@ -187,7 +190,11 @@ final class CloudSyncService: ObservableObject {
         self.modelContainer = container
         Task {
             await checkAccountStatus()
-            resolveUbiquityContainer()
+            if activeProvider == .iCloud {
+                resolveUbiquityContainer()
+            } else if activeProvider == .googleDrive {
+                await triggerSync()
+            }
         }
     }
     
@@ -315,7 +322,17 @@ final class CloudSyncService: ObservableObject {
             return
             
         case .googleDrive:
-            GoogleDriveSyncService.shared.exportBookToLinkedFolder(fileURL: fileURL)
+            if GoogleDriveSyncService.shared.isDirectAPIConnected {
+                Task {
+                    do {
+                        try await GoogleDriveSyncService.shared.uploadBookDirect(fileURL: fileURL)
+                    } catch {
+                        print("GoogleDriveSync: Auto-upload on import failed: \(error.localizedDescription)")
+                    }
+                }
+            } else if GoogleDriveSyncService.shared.isLinkedFolderActive {
+                GoogleDriveSyncService.shared.exportBookToLinkedFolder(fileURL: fileURL)
+            }
             
         case .iCloud, .auto:
             DispatchQueue.global(qos: .utility).async {

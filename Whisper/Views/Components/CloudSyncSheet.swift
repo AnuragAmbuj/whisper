@@ -286,6 +286,7 @@ struct CloudSyncSheet: View {
         Task {
             do {
                 try await googleDrive.signInWithGoogle()
+                cloudSync.providerPreference = .googleDrive
                 syncNotice = "Successfully connected to Google Drive!"
                 await cloudSync.triggerSync()
             } catch {
