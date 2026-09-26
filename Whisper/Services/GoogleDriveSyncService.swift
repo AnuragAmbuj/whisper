@@ -99,15 +99,23 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
     
     nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         #if os(iOS)
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        for scene in scenes {
-            if let window = scene.windows.first(where: { $0.isKeyWindow }) {
-                return window
+        return MainActor.assumeIsolated {
+            let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            for scene in scenes {
+                if let window = scene.windows.first(where: { $0.isKeyWindow }) {
+                    return window
+                }
             }
+            return ASPresentationAnchor()
         }
-        return ASPresentationAnchor()
         #elseif os(macOS)
-        return NSApplication.shared.windows.first ?? ASPresentationAnchor()
+        return MainActor.assumeIsolated {
+            return NSApplication.shared.keyWindow
+                ?? NSApplication.shared.mainWindow
+                ?? NSApplication.shared.windows.first(where: { $0.isVisible && !$0.isMiniaturized })
+                ?? NSApplication.shared.windows.first
+                ?? ASPresentationAnchor()
+        }
         #endif
     }
     
