@@ -11,6 +11,7 @@ import SwiftData
 import AppIntents
 @testable import Whisper
 
+@Suite(.serialized)
 struct TypeSafeAndIntentsTests {
 
     @Test func testTypeSafeMetadataExtraction() async throws {
@@ -199,5 +200,78 @@ struct TypeSafeAndIntentsTests {
         // Should index safely without crash or assertion error
         BookService.shared.indexBookInSpotlight(book)
         #expect(book.title == "Dune")
+    }
+
+    @Test func testComicAIInsightsAndTakeaways() async throws {
+        let comicScript = """
+        [Metadata]
+        Title: The Cosmic Odyssey #1
+        Summary: A deep space expedition encounters an ancient crystalline anomaly emitting temporal signals.
+        Characters: Commander Valen, Lieutenant Kira, Dr. Aris, Prometheus AI
+
+        [Page 1]
+        Commander Valen: "All stations report. Are we holding orbital stability around the pulsar?"
+        Lieutenant Kira: "Thrusters holding at 84 percent, Commander. We are steady."
+
+        [Page 2]
+        Dr. Aris: "Sensors are detecting tachyon particles originating from the core of the anomaly."
+        Prometheus AI: "Warning: Gravitational shear approaching critical thresholds."
+
+        [Page 3]
+        Commander Valen: "Prepare the landing shuttle. We are going down to investigate the monolith."
+        """
+
+        let insights = await AISummarizerService.shared.generateInsights(for: comicScript, bookTitle: "The Cosmic Odyssey #1")
+        #expect(!insights.executiveSummary.isEmpty)
+        #expect(insights.keyTakeaways.count >= 2)
+        #expect(insights.characters.contains { $0.name.contains("Valen") })
+        #expect(insights.characters.contains { $0.name.contains("Kira") })
+    }
+
+    @Test func testComicParserExtractionAndMetadata() async throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let xmlContent = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <ComicInfo>
+            <Title>Nebula Raiders #1</Title>
+            <Series>Nebula Raiders</Series>
+            <Number>1</Number>
+            <Writer>Elena Vance</Writer>
+            <Summary>A pirate crew salvages a derelict dreadnought near Jupiter.</Summary>
+            <Characters>Elena Vance, Jax, Cora</Characters>
+        </ComicInfo>
+        """
+        try xmlContent.write(to: tempDir.appendingPathComponent("ComicInfo.xml"), atomically: true, encoding: .utf8)
+        let ocr = "[Page 1]\nElena: \"Look at that hull breach!\"\nJax: \"Stay alert, sensors are glitching.\""
+        try ocr.write(to: tempDir.appendingPathComponent("ocr_transcript.txt"), atomically: true, encoding: .utf8)
+
+        let extracted = ComicParser.shared.extractTextFromComic(bookDir: tempDir)
+        #expect(extracted.contains("Nebula Raiders"))
+        #expect(extracted.contains("derelict dreadnought"))
+        #expect(extracted.contains("hull breach"))
+    }
+
+    @Test func testTypeSafeSemanticConceptFindInComic() async throws {
+        let comicScript = """
+        [Page 1]
+        Commander Valen: "All stations report. Are we holding orbital stability around the pulsar?"
+        Lieutenant Kira: "Thrusters holding at 84 percent, Commander. We are steady."
+
+        [Page 2]
+        Dr. Aris: "Sensors are detecting tachyon particles originating from the core of the anomaly."
+        Prometheus AI: "Warning: Gravitational shear approaching critical thresholds."
+
+        [Page 3]
+        Commander Valen: "Prepare the landing shuttle. We are going down to investigate the alien monolith."
+        """
+
+        let result = await TypeSafeService.shared.semanticFind(query: "alien monolith anomaly", inDocument: comicScript)
+        #expect(result.verdict == .answered || result.verdict == .partial)
+        #expect(result.existsScore >= 0.50)
+        #expect(!result.matches.isEmpty)
+        #expect(result.matches.first?.excerpt.contains("monolith") == true || result.matches.first?.excerpt.contains("anomaly") == true)
     }
 }

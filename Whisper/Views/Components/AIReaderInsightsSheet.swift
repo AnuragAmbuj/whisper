@@ -269,8 +269,12 @@ struct AIReaderInsightsSheet: View {
     
     private func loadInsights() async {
         isLoading = true
-        let content = book.content.isEmpty ? (book.resolveSearchableContent()) : book.content
-        let analysis = await AISummarizerService.shared.generateInsights(for: content, bookTitle: book.title)
+        let searchable = book.resolveSearchableContent()
+        let isPlaceholder = book.content.hasPrefix("EPUB Content") ||
+            book.content.hasPrefix("Comic Book -") ||
+            book.content.hasPrefix("PDF Document -")
+        let contentToAnalyze = (!isPlaceholder && book.content.count > 100) ? book.content : (searchable.isEmpty ? book.content : searchable)
+        let analysis = await AISummarizerService.shared.generateInsights(for: contentToAnalyze, bookTitle: book.title)
         await MainActor.run {
             self.insights = analysis
             self.isLoading = false

@@ -194,7 +194,8 @@ final class Book {
   /// Resolves the actual full body text of the book across formats
   /// - Text: returns `content` or raw file content
   /// - EPUB: reads all chapter HTML/XHTML files from `bookDir` and strips tags
-  /// - PDF: reads all text from `PDFDocument` pages
+  /// - PDF: reads all text from `PDFDocument` pages with page headings
+  /// - Comic: reads ComicInfo.xml metadata and extracts page dialogue via OCR
   func resolveSearchableContent() -> String {
     // 1. Text format: read from file if available, or return stored content
     if format == .text {
@@ -265,7 +266,7 @@ final class Book {
       }
     }
 
-    // 3. PDF format: extract text from pages
+    // 3. PDF format: extract text from pages with page tags
     if format == .pdf, let pdfURL = resolvedURL, FileManager.default.fileExists(atPath: pdfURL.path) {
       #if canImport(PDFKit)
       if let doc = PDFDocument(url: pdfURL) {
@@ -274,7 +275,7 @@ final class Book {
           if let page = doc.page(at: i),
              let text = page.string?.trimmingCharacters(in: .whitespacesAndNewlines),
              !text.isEmpty {
-            pagesText.append(text)
+            pagesText.append("[Page \(i + 1)]\n\(text)")
           }
         }
         if !pagesText.isEmpty {
@@ -284,8 +285,22 @@ final class Book {
       #endif
     }
 
-    // Fallback: existing content or title + author
-    return content.isEmpty ? "\(title) by \(author)" : content
+    // 4. Comic format (CBZ/CBR): extract metadata from ComicInfo.xml and page OCR
+    if format == .comic, let dir = bookDir {
+      let comicText = ComicParser.shared.extractTextFromComic(bookDir: dir)
+      if !comicText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        return comicText
+      }
+    }
+
+    // Fallback: existing content if informative, or title + author
+    let isPlaceholder = content.hasPrefix("EPUB Content") ||
+      content.hasPrefix("Comic Book -") ||
+      content.hasPrefix("PDF Document -")
+    if !content.isEmpty && !isPlaceholder {
+      return content
+    }
+    return "\(title) by \(author)"
   }
 
   /// Deletes all files associated with this book (EPUB directory, cover image)

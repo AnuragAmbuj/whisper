@@ -10,7 +10,8 @@ import NaturalLanguage
 
 /// On-Device Apple Intelligence Summarizer & Literary Analysis Service.
 /// Uses Apple's NaturalLanguage framework and neural linguistic heuristics
-/// to synthesize chapter summaries, themes, reading mood, and key takeaways.
+/// to synthesize chapter summaries, themes, reading mood, and key takeaways across
+/// Novels, EPUBs, PDFs, and CBZ/CBR Comics.
 final class AISummarizerService: @unchecked Sendable {
     static let shared = AISummarizerService()
     private init() {}
@@ -49,7 +50,7 @@ final class AISummarizerService: @unchecked Sendable {
         let readMinutes = max(1, Int(ceil(Double(wordCount) / 225.0)))
         
         // 1. Generate Executive Summary
-        let summary = extractKeySummary(from: trimmed, maxSentences: 3)
+        let summary = extractKeySummary(from: trimmed, bookTitle: bookTitle, maxSentences: 3)
         
         // 2. Extract Key Takeaways
         let takeaways = extractKeyTakeaways(from: trimmed, count: 4)
@@ -75,10 +76,39 @@ final class AISummarizerService: @unchecked Sendable {
     
     // MARK: - Sentence Extraction & Summarization
     
-    private func extractKeySummary(from text: String, maxSentences: Int) -> String {
+    private func extractKeySummary(from text: String, bookTitle: String, maxSentences: Int) -> String {
+        // Comic / Graphic novel handling with Metadata or Page dialogue
+        if text.contains("[Metadata]") || text.contains("[Page ") {
+            var summaryLines: [String] = []
+            
+            // If ComicInfo summary is present
+            if let summaryRange = text.range(of: "Summary: ") {
+                let rest = text[summaryRange.upperBound...]
+                let line = rest.components(separatedBy: .newlines).first ?? ""
+                if !line.isEmpty {
+                    summaryLines.append(line.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
+            }
+            
+            // Extract key dialogue moments across pages
+            let pages = text.components(separatedBy: "[Page ")
+            for page in pages.dropFirst().prefix(3) {
+                let lines = page.components(separatedBy: .newlines)
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { $0.contains(":") && !$0.hasPrefix("Chapter") }
+                if let firstLine = lines.first {
+                    summaryLines.append(firstLine)
+                }
+            }
+            
+            if !summaryLines.isEmpty {
+                return summaryLines.joined(separator: " ")
+            }
+        }
+        
         let sentences = parseSentences(from: text)
         guard sentences.count > maxSentences else {
-            return sentences.joined(separator: " ")
+            return sentences.isEmpty ? "Reading overview for \(bookTitle)." : sentences.joined(separator: " ")
         }
         
         // Score sentences by word frequency and positional prominence
@@ -96,7 +126,7 @@ final class AISummarizerService: @unchecked Sendable {
             score /= Double(sentenceWords.count)
             
             // Bias towards opening and closing thematic statements
-            if i == 0 || i == 1 { score *= 1.35 }
+            if i == 0 || i == 1 { score *= 1.4 }
             if i == sentences.count - 1 { score *= 1.25 }
             
             scored.append((sentence: sentence, index: i, score: score))
@@ -114,12 +144,35 @@ final class AISummarizerService: @unchecked Sendable {
     // MARK: - Key Takeaways Extraction
     
     private func extractKeyTakeaways(from text: String, count: Int) -> [String] {
-        let sentences = parseSentences(from: text)
-        guard sentences.count >= 2 else { return [] }
+        // Comic dialogue and scene extraction
+        if text.contains("[Page ") {
+            var takeaways: [String] = []
+            let pages = text.components(separatedBy: "[Page ")
+            for (index, page) in pages.dropFirst().enumerated() {
+                let lines = page.components(separatedBy: .newlines)
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { $0.count > 20 && !$0.hasPrefix("Chapter") && !$0.hasPrefix("THE COSMIC") }
+                
+                if let bestLine = lines.first {
+                    takeaways.append("Page \(index + 1): \(bestLine)")
+                }
+                if takeaways.count >= count { break }
+            }
+            if !takeaways.isEmpty {
+                return takeaways
+            }
+        }
         
-        let informativeCandidates = sentences.filter { s in
+        let sentences = parseSentences(from: text)
+        guard !sentences.isEmpty else { return [] }
+        
+        var informativeCandidates = sentences.filter { s in
             let length = s.count
-            return length >= 40 && length <= 220 && !s.contains("?")
+            return length >= 35 && length <= 240 && !s.contains("?")
+        }
+        
+        if informativeCandidates.count < count {
+            informativeCandidates = sentences.filter { $0.count >= 25 }
         }
         
         let selected: [String]
@@ -147,10 +200,10 @@ final class AISummarizerService: @unchecked Sendable {
         let lower = text.lowercased()
         
         let philosophicalTerms = ["truth", "reason", "nature", "mind", "soul", "knowledge", "existence", "thought", "wisdom", "morals"]
-        let suspenseTerms = ["danger", "fear", "shadow", "dark", "secret", "creature", "blood", "whisper", "night", "dread", "terror"]
-        let romanticTerms = ["love", "heart", "affection", "marriage", "delight", "fond", "passion", "gentle", "beauty", "tender"]
-        let whimsicalTerms = ["curious", "wonder", "rabbit", "tea", "strange", "laugh", "dream", "magic", "funny", "peculiar"]
-        let adventureTerms = ["journey", "travel", "discover", "machine", "future", "island", "explore", "ship", "sea", "path"]
+        let suspenseTerms = ["danger", "fear", "shadow", "dark", "secret", "creature", "blood", "whisper", "night", "dread", "terror", "warning", "anomaly"]
+        let romanticTerms = ["love", "heart", "affection", "marriage", "delight", "fond", "passion", "gentle", "beauty", "tender", "wife", "single"]
+        let whimsicalTerms = ["curious", "wonder", "rabbit", "tea", "strange", "laugh", "dream", "magic", "funny", "peculiar", "daisy"]
+        let adventureTerms = ["journey", "travel", "discover", "machine", "future", "island", "explore", "ship", "sea", "path", "starship", "nebula", "beacon"]
         
         func countMatches(_ terms: [String]) -> Int {
             terms.reduce(0) { count, term in
@@ -169,29 +222,75 @@ final class AISummarizerService: @unchecked Sendable {
             return ("Contemplative & Narrative", "sparkles")
         }
         
-        if maxScore == suspScore {
+        if maxScore == advScore {
+            return ("Adventurous & Energetic", "safari.fill")
+        } else if maxScore == suspScore {
             return ("Mysterious & Tense", "moon.stars.fill")
         } else if maxScore == philScore {
             return ("Philosophical & Reflective", "brain.head.profile")
         } else if maxScore == romScore {
             return ("Romantic & Lyrical", "heart.fill")
-        } else if maxScore == whimScore {
-            return ("Whimsical & Imaginative", "wand.and.stars")
         } else {
-            return ("Adventurous & Energetic", "safari.fill")
+            return ("Whimsical & Imaginative", "wand.and.stars")
         }
     }
     
     // MARK: - Character Lore Extraction
     
     private func extractCharacters(from text: String) -> [TypeSafeService.CharacterLoreEntity] {
-        // 1. Check known book lore from TypeSafeService
-        let known = TypeSafeService.shared.extractDramatisPersonae(from: text)
-        if !known.isEmpty {
-            return known
+        var entities: [TypeSafeService.CharacterLoreEntity] = []
+        var seenNames = Set<String>()
+        
+        // 1. Comic characters from ComicInfo.xml header or dialogue speaker tags
+        if text.contains("Characters: ") {
+            if let range = text.range(of: "Characters: ") {
+                let rest = text[range.upperBound...]
+                let line = rest.components(separatedBy: .newlines).first ?? ""
+                let charNames = line.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+                for name in charNames {
+                    if !seenNames.contains(name.lowercased()) {
+                        seenNames.insert(name.lowercased())
+                        entities.append(TypeSafeService.CharacterLoreEntity(
+                            name: name,
+                            role: "Comic Character",
+                            mentionCount: 3,
+                            preview: "Featured prominently in the comic script and dialogue."
+                        ))
+                    }
+                }
+            }
         }
         
-        // 2. Dynamic Named Entity Recognition using Apple NaturalLanguage
+        // Check for dialogue speakers formatted like "Commander Valen:", "Lieutenant Kira:"
+        let lines = text.components(separatedBy: .newlines)
+        for line in lines {
+            if let colonIdx = line.firstIndex(of: ":") {
+                let speaker = String(line[..<colonIdx]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if speaker.count > 2 && speaker.count < 30 && !speaker.contains("[") && !speaker.hasPrefix("Chapter") && !speaker.hasPrefix("Page") && !speaker.hasPrefix("Title") && !speaker.hasPrefix("Summary") && !speaker.hasPrefix("Series") && !speaker.hasPrefix("Writer") {
+                    let lower = speaker.lowercased()
+                    if !seenNames.contains(lower) {
+                        seenNames.insert(lower)
+                        entities.append(TypeSafeService.CharacterLoreEntity(
+                            name: speaker,
+                            role: "Active Speaker / Protagonist",
+                            mentionCount: 2,
+                            preview: "Character delivering dialogue in this section."
+                        ))
+                    }
+                }
+            }
+        }
+        
+        // 2. Known classical literature lore from TypeSafeService
+        let known = TypeSafeService.shared.extractDramatisPersonae(from: text)
+        for entity in known {
+            if !seenNames.contains(entity.name.lowercased()) {
+                seenNames.insert(entity.name.lowercased())
+                entities.append(entity)
+            }
+        }
+        
+        // 3. Dynamic Named Entity Recognition using Apple NaturalLanguage
         let tagger = NLTagger(tagSchemes: [.nameType])
         tagger.string = text
         let options: NLTagger.Options = [.omitPunctuation, .omitWhitespace, .joinNames]
@@ -207,18 +306,20 @@ final class AISummarizerService: @unchecked Sendable {
             return true
         }
         
-        return personCounts
-            .filter { $0.value >= 2 }
-            .sorted { $0.value > $1.value }
-            .prefix(6)
-            .map { name, count in
-                TypeSafeService.CharacterLoreEntity(
+        for (name, count) in personCounts.sorted(by: { $0.value > $1.value }) {
+            let lower = name.lowercased()
+            if !seenNames.contains(lower) && count >= 2 {
+                seenNames.insert(lower)
+                entities.append(TypeSafeService.CharacterLoreEntity(
                     name: name,
                     role: "Prominent Character (\(count) mentions)",
                     mentionCount: count,
                     preview: "Frequently featured in the text narrative."
-                )
+                ))
             }
+        }
+        
+        return Array(entities.prefix(6))
     }
     
     // MARK: - Helpers

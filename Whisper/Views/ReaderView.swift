@@ -298,7 +298,9 @@ struct ReaderView: View {
       }
     }
     .sheet(isPresented: $showSmartFind) {
-      SmartFindSheet(book: viewModel.book, theme: viewModel.theme)
+      SmartFindSheet(book: viewModel.book, theme: viewModel.theme) { lineIndex, excerpt in
+        handleSmartFindNavigation(lineIndex: lineIndex, excerpt: excerpt)
+      }
     }
     .sheet(isPresented: $showAIInsights) {
       AIReaderInsightsSheet(book: viewModel.book)
@@ -309,6 +311,24 @@ struct ReaderView: View {
     .onDisappear {
       try? modelContext.save()
     }
+  }
+
+  private func handleSmartFindNavigation(lineIndex: Int, excerpt: String) {
+    // 1. Check if excerpt indicates a specific page (PDF / Comic format)
+    let pattern = #"(?:\[Page|Page)\s+(\d+)"#
+    if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+       let match = regex.firstMatch(in: excerpt, range: NSRange(excerpt.startIndex..., in: excerpt)),
+       let range = Range(match.range(at: 1), in: excerpt),
+       let pageNum = Int(excerpt[range]) {
+      let targetIndex = max(0, pageNum - 1)
+      pageIndex = targetIndex
+      viewModel.updateLocation(targetIndex)
+      return
+    }
+
+    // 2. Default line or location navigation
+    pageIndex = lineIndex
+    viewModel.updateLocation(lineIndex)
   }
 }
 

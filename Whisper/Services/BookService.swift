@@ -127,6 +127,11 @@ class BookService {
       if !fileManager.fileExists(atPath: ch1URL.path) && (book.title.contains("Alice") || book.title.contains("Wonderland")) {
         populateAliceEPUB(at: bookDir)
       }
+    } else if book.format == .comic {
+      let ocrURL = bookDir.appendingPathComponent("ocr_transcript.txt")
+      if !fileManager.fileExists(atPath: ocrURL.path) && (book.title.contains("Cosmic") || book.title.contains("Odyssey")) {
+        populateComicFiles(at: bookDir)
+      }
     }
   }
 
@@ -387,6 +392,71 @@ class BookService {
     #endif
   }
 
+  func populateComicFiles(at comicDir: URL) {
+    let fileManager = FileManager.default
+    try? fileManager.createDirectory(at: comicDir, withIntermediateDirectories: true)
+
+    let comicInfoXML = """
+    <?xml version="1.0" encoding="utf-8"?>
+    <ComicInfo xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <Title>The Cosmic Odyssey</Title>
+      <Series>The Cosmic Odyssey</Series>
+      <Number>1</Number>
+      <Summary>Commander Valen leads the exploratory vessel Prometheus into the uncharted Orion Nebula. When the starship encounters a temporal rift emitting structured radio pulses, Lieutenant Kira and Dr. Aris discover an ancient alien artifact dormant for three million years.</Summary>
+      <Writer>Nova Stellaris</Writer>
+      <Penciller>Aria Vance</Penciller>
+      <Characters>Commander Valen, Lieutenant Kira, Dr. Aris, Prometheus AI</Characters>
+      <Genre>Sci-Fi Adventure</Genre>
+    </ComicInfo>
+    """
+    let xmlURL = comicDir.appendingPathComponent("ComicInfo.xml")
+    if !fileManager.fileExists(atPath: xmlURL.path) {
+      try? comicInfoXML.write(to: xmlURL, atomically: true, encoding: .utf8)
+    }
+
+    let ocrTranscript = """
+    [Metadata]
+    Title: The Cosmic Odyssey
+    Series: The Cosmic Odyssey #1
+    Writer: Nova Stellaris
+    Characters: Commander Valen, Lieutenant Kira, Dr. Aris, Prometheus AI
+    Summary: Commander Valen leads the exploratory vessel Prometheus into the uncharted Orion Nebula. When the starship encounters a temporal rift emitting structured radio pulses, Lieutenant Kira and Dr. Aris discover an ancient alien artifact dormant for three million years.
+
+    [Page 1]
+    THE COSMIC ODYSSEY
+    Chapter 1: Departure from Sector 7
+    Commander Valen: "All systems online. The hyperdrive core is fully charged. Set course for the Orion Nebula."
+    Lieutenant Kira: "Coordinates locked, Commander. Sub-space sensors are detecting a strange rhythmic pulse ahead."
+    Dr. Aris: "It is not a pulsar. The pulse pattern is mathematical."
+
+    [Page 2]
+    Chapter 2: The Temporal Rift
+    Lieutenant Kira: "Warning! Massive gravitational anomaly pulling the Prometheus off course!"
+    Commander Valen: "Hold steady! Divert all auxiliary power to inertial dampeners!"
+    Dr. Aris: "Look at the visual telemetry! Space is folding around us!"
+    Prometheus AI: "Spatial stability at 42 percent. Approaching singularity threshold."
+
+    [Page 3]
+    Chapter 3: The Ancient Beacon
+    Prometheus AI: "Sensors clear. Temporal rift bypassed. Massive artificial structure detected ahead."
+    Commander Valen: "Magnify the main screen. By the stars... what is that?"
+    Lieutenant Kira: "It is an alien monolith. And the beacon has just awakened."
+    Dr. Aris: "After three million years, it has been waiting for someone to find it."
+    """
+    let ocrURL = comicDir.appendingPathComponent("ocr_transcript.txt")
+    if !fileManager.fileExists(atPath: ocrURL.path) {
+      try? ocrTranscript.write(to: ocrURL, atomically: true, encoding: .utf8)
+    }
+
+    let pages = ["comic_page_1.jpg", "comic_page_2.jpg", "comic_page_3.jpg"]
+    let pagesURL = comicDir.appendingPathComponent("pages.json")
+    if !fileManager.fileExists(atPath: pagesURL.path) {
+      if let data = try? JSONEncoder().encode(pages) {
+        try? data.write(to: pagesURL)
+      }
+    }
+  }
+
   private func createSampleComic() -> Book {
     let bookID = UUID()
     let comicDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -468,12 +538,14 @@ class BookService {
       #endif
     }
 
+    populateComicFiles(at: comicDir)
+
     return Book(
       id: bookID,
       title: "The Cosmic Odyssey",
       author: "Nova Stellaris",
       coverImageName: "",
-      content: "Graphic comic book containing illustrated interplanetary space exploration scenes.",
+      content: "Commander Valen leads the exploratory vessel Prometheus into the uncharted Orion Nebula. When the starship encounters a temporal rift emitting structured radio pulses, Lieutenant Kira and Dr. Aris discover an ancient alien artifact dormant for three million years.",
       progress: 0.0,
       format: .comic,
       url: comicDir,

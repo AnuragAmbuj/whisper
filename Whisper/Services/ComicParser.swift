@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import Vision
 #if canImport(UIKit)
 import UIKit
 #elseif canImport(AppKit)
@@ -36,8 +37,21 @@ enum ComicParserError: Error, LocalizedError {
     }
 }
 
-/// Cross-platform comic book parser supporting CBZ format
-/// CBR (RAR) support requires additional library integration
+/// Metadata extracted from standard ComicRack ComicInfo.xml
+struct ComicMetadata: Sendable {
+    var title: String = ""
+    var series: String = ""
+    var number: String = ""
+    var summary: String = ""
+    var writer: String = ""
+    var penciller: String = ""
+    var characters: [String] = []
+    var teams: [String] = []
+    var genre: String = ""
+    var notes: String = ""
+}
+
+/// Cross-platform comic book parser supporting CBZ format and ComicRack ComicInfo.xml metadata + Apple Vision OCR
 class ComicParser {
     static let shared = ComicParser()
     
@@ -88,6 +102,9 @@ class ComicParser {
                 throw ComicParserError.unsupportedFormat
             }
             
+            // Parse ComicInfo.xml if present
+            let metadata = parseComicInfoXML(in: extractDir)
+            
             // Find all images and sort them
             let imageURLs = try findImages(in: extractDir)
             
@@ -121,19 +138,42 @@ class ComicParser {
                 coverImageName = generateCover(from: firstImage, bookID: bookID, documentsDir: documentsDir)
             }
             
-            // Extract title from filename
-            let title = sourceURL.deletingPathExtension().lastPathComponent
+            // Determine title, author, and description from ComicInfo.xml or fallback to filename
+            var title = sourceURL.deletingPathExtension().lastPathComponent
+            var author = "Unknown"
+            var initialContent = ""
+            
+            if let meta = metadata {
+                if !meta.title.isEmpty {
+                    title = meta.title
+                } else if !meta.series.isEmpty {
+                    title = meta.number.isEmpty ? meta.series : "\(meta.series) #\(meta.number)"
+                }
+                
+                if !meta.writer.isEmpty {
+                    author = meta.writer
+                }
+                
+                if !meta.summary.isEmpty {
+                    initialContent = meta.summary
+                }
+            }
             
             // Create Book
             let book = Book(
                 id: bookID,
                 title: title,
-                author: "Unknown",
+                author: author,
                 coverImageName: coverImageName,
-                content: "Comic Book - \(imageURLs.count) pages",
+                content: initialContent.isEmpty ? "Comic Book - \(imageURLs.count) pages" : initialContent,
                 format: .comic,
                 url: extractDir
             )
+            
+            // Asynchronously prewarm OCR text extraction in the background
+            Task.detached(priority: .utility) { [weak self] in
+                _ = self?.extractTextFromComic(bookDir: extractDir)
+            }
             
             print("ComicParser: Successfully parsed '\(title)' with \(imageURLs.count) pages")
             return book
@@ -175,6 +215,160 @@ class ComicParser {
         
         // 2. Fallback: scan directory directly
         return (try? findImages(in: bookDir)) ?? []
+    }
+    
+    // MARK: - Comic Metadata & ComicInfo.xml Parsing
+    
+    /// Parses ComicRack ComicInfo.xml if present in the comic's directory
+    func parseComicInfoXML(in directory: URL) -> ComicMetadata? {
+        let fileManager = FileManager.default
+        var xmlURL: URL? = directory.appendingPathComponent("ComicInfo.xml")
+        
+        if !fileManager.fileExists(atPath: xmlURL!.path) {
+            // Search subdirectories
+            if let enumerator = fileManager.enumerator(at: directory, includingPropertiesForKeys: nil) {
+                while let file = enumerator.nextObject() as? URL {
+                    if file.lastPathComponent.lowercased() == "comicinfo.xml" {
+                        xmlURL = file
+                        break
+                    }
+                }
+            }
+        }
+        
+        guard let validURL = xmlURL, fileManager.fileExists(atPath: validURL.path),
+              let xmlString = try? String(contentsOf: validURL, encoding: .utf8) else {
+            return nil
+        }
+        
+        var meta = ComicMetadata()
+        
+        func extractTag(_ tag: String) -> String {
+            let pattern = "<\(tag)>([\\s\\S]*?)</\(tag)>"
+            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+               let match = regex.firstMatch(in: xmlString, range: NSRange(xmlString.startIndex..., in: xmlString)),
+               let range = Range(match.range(at: 1), in: xmlString) {
+                return String(xmlString[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            return ""
+        }
+        
+        meta.title = extractTag("Title")
+        meta.series = extractTag("Series")
+        meta.number = extractTag("Number")
+        meta.summary = extractTag("Summary")
+        meta.writer = extractTag("Writer")
+        meta.penciller = extractTag("Penciller")
+        meta.genre = extractTag("Genre")
+        meta.notes = extractTag("Notes")
+        
+        let chars = extractTag("Characters")
+        if !chars.isEmpty {
+            meta.characters = chars.components(separatedBy: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        }
+        
+        let teams = extractTag("Teams")
+        if !teams.isEmpty {
+            meta.teams = teams.components(separatedBy: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        }
+        
+        return meta
+    }
+    
+    // MARK: - Comic OCR & Searchable Content Extraction
+    
+    /// Extracts full readable dialogue, narration, and metadata from a comic book
+    /// Uses cached ocr_transcript.txt if present, or performs Apple Vision Neural OCR on pages.
+    func extractTextFromComic(bookDir: URL) -> String {
+        let fileManager = FileManager.default
+        let transcriptURL = bookDir.appendingPathComponent("ocr_transcript.txt")
+        
+        // 1. Check if previously transcribed and contains metadata
+        if fileManager.fileExists(atPath: transcriptURL.path),
+           let cached = try? String(contentsOf: transcriptURL, encoding: .utf8),
+           !cached.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if cached.contains("[Metadata]") {
+                return cached
+            }
+        }
+        
+        // 2. Collect ComicInfo.xml metadata if present
+        var sections: [String] = []
+        let metadata = parseComicInfoXML(in: bookDir)
+        if let meta = metadata {
+            var metaHeader: [String] = ["[Metadata]"]
+            if !meta.title.isEmpty { metaHeader.append("Title: \(meta.title)") }
+            if !meta.series.isEmpty { metaHeader.append("Series: \(meta.series) #\(meta.number)") }
+            if !meta.writer.isEmpty { metaHeader.append("Writer: \(meta.writer)") }
+            if !meta.characters.isEmpty { metaHeader.append("Characters: \(meta.characters.joined(separator: ", "))") }
+            if !meta.summary.isEmpty { metaHeader.append("Summary: \(meta.summary)") }
+            sections.append(metaHeader.joined(separator: "\n"))
+        }
+
+        // If transcript exists, combine with metadata
+        if fileManager.fileExists(atPath: transcriptURL.path),
+           let cached = try? String(contentsOf: transcriptURL, encoding: .utf8),
+           !cached.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            sections.append(cached)
+            let combined = sections.joined(separator: "\n\n")
+            return combined
+        }
+        
+        // 3. Perform Apple Vision Neural OCR on comic pages
+        let pages = getPages(from: bookDir)
+        let sampleLimit = min(pages.count, 35) // OCR up to 35 pages for performance
+        
+        for index in 0..<sampleLimit {
+            let pageURL = pages[index]
+            let pageText = performOCR(on: pageURL)
+            if !pageText.isEmpty {
+                sections.append("[Page \(index + 1)]\n\(pageText)")
+            }
+        }
+        
+        let combined = sections.joined(separator: "\n\n")
+        
+        // Save to cache file so subsequent searches and AI summaries are instant
+        if !combined.isEmpty {
+            try? combined.write(to: transcriptURL, atomically: true, encoding: .utf8)
+        }
+        
+        return combined
+    }
+    
+    /// Performs Apple Vision on-device OCR on a single comic image
+    func performOCR(on imageURL: URL) -> String {
+        #if canImport(UIKit)
+        guard let image = UIImage(contentsOfFile: imageURL.path),
+              let cgImage = image.cgImage else {
+            return ""
+        }
+        #elseif canImport(AppKit)
+        guard let image = NSImage(contentsOfFile: imageURL.path),
+              let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return ""
+        }
+        #else
+        return ""
+        #endif
+        
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = true
+        
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        do {
+            try handler.perform([request])
+            guard let observations = request.results else { return "" }
+            let lines = observations.compactMap { $0.topCandidates(1).first?.string }
+            return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            return ""
+        }
     }
     
     // MARK: - Private Methods

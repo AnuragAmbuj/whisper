@@ -6,8 +6,9 @@
 //
 
 import Foundation
+import NaturalLanguage
 
-/// Integrates TypeSafe AI System One decision models (Jev).
+/// Integrates TypeSafe AI System One decision models (Jev) and Apple NaturalLanguage Neural Embeddings.
 /// Cookbooks and specifications:
 /// - Semantic Find: https://docs.typesafe.ai/cookbooks/semantic_find.md
 /// - Pre-parsed Value Extraction: https://docs.typesafe.ai/cookbooks/pre_parsed_value_extraction_cookbook.md
@@ -67,6 +68,87 @@ final class TypeSafeService: @unchecked Sendable {
     let preview: String
   }
 
+  // MARK: - Neural Semantic Scoring Helpers
+
+  private static let sentenceEmbedding = NLEmbedding.sentenceEmbedding(for: .english)
+  private static let wordEmbedding = NLEmbedding.wordEmbedding(for: .english)
+
+  nonisolated private func extractLemmas(from text: String) -> [String] {
+    let tagger = NLTagger(tagSchemes: [.lemma])
+    tagger.string = text
+    var lemmas: [String] = []
+    tagger.enumerateTags(in: text.startIndex..<text.endIndex, unit: .word, scheme: .lemma, options: [.omitPunctuation, .omitWhitespace]) { tag, tokenRange in
+      if let lemma = tag?.rawValue.lowercased(), lemma.count > 2 {
+        lemmas.append(lemma)
+      } else {
+        let raw = String(text[tokenRange]).lowercased()
+        if raw.count > 2 { lemmas.append(raw) }
+      }
+      return true
+    }
+    return lemmas
+  }
+
+  nonisolated private func computeSemanticScore(
+    query: String,
+    queryTokens: [String],
+    queryLemmas: [String],
+    passage: String,
+    passageLower: String
+  ) -> Double {
+    var score: Double = 0.0
+    let queryLower = query.lowercased()
+
+    // 1. Exact phrase match
+    if passageLower.contains(queryLower) {
+      score += 12.0
+    }
+
+    // 2. Token overlap & lemmatization
+    let passageTokens = passageLower.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0.count > 1 }
+    let passageTokenSet = Set(passageTokens)
+
+    var tokenHitCount = 0
+    for token in queryTokens {
+      if passageTokenSet.contains(token) {
+        score += 3.5
+        tokenHitCount += 1
+      } else if passageLower.contains(token) {
+        score += 2.0
+        tokenHitCount += 1
+      }
+    }
+
+    if tokenHitCount > 1 {
+      score += Double(tokenHitCount) * 1.5
+    }
+
+    for lemma in queryLemmas {
+      if passageTokenSet.contains(lemma) {
+        score += 2.0
+      }
+    }
+
+    // 3. Apple NaturalLanguage Word Embedding Cosine Distance (Synonyms / Semantic Concepts)
+    if let we = Self.wordEmbedding {
+      for qToken in queryTokens {
+        var minDistance = 2.0
+        for pToken in passageTokens {
+          let dist = we.distance(between: qToken, and: pToken)
+          if dist < minDistance { minDistance = dist }
+          if minDistance < 0.6 { break }
+        }
+        // Words with distance < 1.15 share semantic relatedness
+        if minDistance < 1.15 {
+          let similarity = (1.15 - minDistance) / 1.15
+          score += similarity * 3.5
+        }
+      }
+    }
+
+    return score
+  }
+
   // MARK: - Pre-parsed Value Extraction (Cookbook: pre_parsed_value_extraction_cookbook)
   /// Extracts clean title and author from noisy scanlation/ebook filenames
   nonisolated func extractCleanMetadata(from filename: String) -> ExtractedBookMetadata {
@@ -108,17 +190,11 @@ final class TypeSafeService: @unchecked Sendable {
   // MARK: - Live System One Semantic Find (POST https://api.typesafe.ai/v1/systemone)
 
   /// Executes semantic search using live TypeSafe System One API (Jev),
-  /// with automatic fallback to local semantic scoring when offline.
+  /// with automatic fallback to local neural semantic scoring when offline.
   nonisolated func semanticFind(query: String, inDocument content: String, maxResults: Int = 5) async -> SemanticFindResult {
     let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmedQuery.isEmpty, !content.isEmpty else {
       return SemanticFindResult(query: query, existsScore: 0.0, verdict: .absent, matches: [])
-    }
-
-    // Check API Key
-    let apiKey = TypeSafeConfig.shared.apiKey
-    guard !apiKey.isEmpty else {
-      return evaluateLocalSemanticFind(query: trimmedQuery, content: content, maxResults: maxResults)
     }
 
     // Split document into indexed candidate paragraphs
@@ -131,8 +207,19 @@ final class TypeSafeService: @unchecked Sendable {
       return SemanticFindResult(query: query, existsScore: 0.0, verdict: .absent, matches: [])
     }
 
-    // Select candidate paragraphs (up to 30 candidates to stay well within Jev's 255 choice limit and optimize latency)
+    // Select candidate paragraphs using neural embeddings
     let candidates = selectTopCandidates(paragraphs: allParagraphs, query: trimmedQuery, maxCandidates: 30)
+
+    // If no candidate has semantic relevance, return absent immediately without wasting API calls
+    guard !candidates.isEmpty else {
+      return SemanticFindResult(query: query, existsScore: 0.05, verdict: .absent, matches: [])
+    }
+
+    // Check API Key
+    let apiKey = TypeSafeConfig.shared.apiKey
+    guard !apiKey.isEmpty else {
+      return evaluateLocalSemanticFind(query: trimmedQuery, content: content, maxResults: maxResults)
+    }
 
     // Build Choice criteria and state string
     var criteriaDict: [String: String] = [:]
@@ -241,7 +328,7 @@ final class TypeSafeService: @unchecked Sendable {
 
       for (lineID, prob) in sortedKeys {
         if let info = candidateMap[lineID] {
-          let displayRel = min(0.98, max(0.45, prob * 1.5))
+          let displayRel = min(0.98, max(0.50, prob * 1.5))
           matches.append(
             SemanticMatch(
               lineID: lineID,
@@ -279,7 +366,7 @@ final class TypeSafeService: @unchecked Sendable {
     )
   }
 
-  // MARK: - Candidate Pre-selection for Jev Choice Primitives
+  // MARK: - Candidate Pre-selection via Neural Semantic Embeddings
 
   nonisolated private func selectTopCandidates(
     paragraphs: [String],
@@ -289,38 +376,43 @@ final class TypeSafeService: @unchecked Sendable {
     let tokens = query.lowercased()
       .components(separatedBy: CharacterSet.alphanumerics.inverted)
       .filter { $0.count > 2 }
+    let lemmas = extractLemmas(from: query)
 
     var scored: [(lineID: String, index: Int, text: String, score: Double)] = []
 
     for (index, text) in paragraphs.enumerated() {
       let lower = text.lowercased()
-      var score: Double = 0.0
-      if lower.contains(query.lowercased()) { score += 10.0 }
-      for token in tokens {
-        if lower.contains(token) { score += 2.0 }
-      }
+      let s = computeSemanticScore(query: query, queryTokens: tokens, queryLemmas: lemmas, passage: text, passageLower: lower)
       let lineID = String(format: "L%03d", index + 1)
-      scored.append((lineID: lineID, index: index, text: text, score: score))
+      scored.append((lineID: lineID, index: index, text: text, score: s))
     }
 
-    // If any token matches exist, pick top scoring, otherwise take evenly distributed passages
-    let withMatches = scored.filter { $0.score > 0 }
-    if !withMatches.isEmpty {
-      return withMatches
-        .sorted { $0.score > $1.score }
-        .prefix(maxCandidates)
-        .map { ($0.lineID, $0.index, $0.text) }
-    } else {
-      let step = max(1, paragraphs.count / maxCandidates)
-      return stride(from: 0, to: paragraphs.count, by: step)
-        .prefix(maxCandidates)
-        .map { i in
-          (lineID: String(format: "L%03d", i + 1), index: i, text: paragraphs[i])
-        }
+    // Filter to candidates with true relevance (threshold: 0.8)
+    let relevant = scored.filter { $0.score >= 0.8 }
+    guard !relevant.isEmpty else {
+      return [] // Strictly NO random stride passages!
     }
+
+    // Re-rank top candidates using Sentence Vector Embeddings
+    let se = Self.sentenceEmbedding
+    let reranked = relevant.map { item -> (lineID: String, index: Int, text: String, finalScore: Double) in
+      var finalScore = item.score
+      if let se = se {
+        let dist = se.distance(between: query, and: item.text)
+        if dist < 1.35 {
+          finalScore += (1.35 - dist) * 8.0
+        }
+      }
+      return (item.lineID, item.index, item.text, finalScore)
+    }
+
+    return reranked
+      .sorted { $0.finalScore > $1.finalScore }
+      .prefix(maxCandidates)
+      .map { ($0.lineID, $0.index, $0.text) }
   }
 
-  // MARK: - Local Semantic Find Heuristic (Fallback & Offline)
+  // MARK: - Local Semantic Evaluation (On-Device Apple Intelligence Fallback)
 
   nonisolated func evaluateLocalSemanticFind(query: String, content: String, maxResults: Int) -> SemanticFindResult {
     let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -340,49 +432,61 @@ final class TypeSafeService: @unchecked Sendable {
     let queryWords = trimmedQuery.lowercased()
       .components(separatedBy: CharacterSet.alphanumerics.inverted)
       .filter { $0.count > 2 }
+    let lemmas = extractLemmas(from: trimmedQuery)
 
     var lineScores: [(index: Int, lineID: String, text: String, rawScore: Double)] = []
 
     for (index, line) in rawLines.enumerated() {
       let lineLower = line.lowercased()
-      var score: Double = 0.0
-
-      if lineLower.contains(trimmedQuery.lowercased()) {
-        score += 8.0
-      }
-
-      var matchesInLine = 0
-      for word in queryWords {
-        if lineLower.contains(word) {
-          matchesInLine += 1
-          score += 2.0
-        }
-      }
-
-      if matchesInLine > 1 {
-        score += Double(matchesInLine) * 1.5
-      }
-
+      let score = computeSemanticScore(
+        query: trimmedQuery,
+        queryTokens: queryWords,
+        queryLemmas: lemmas,
+        passage: line,
+        passageLower: lineLower
+      )
       let lineID = String(format: "L%03d", index + 1)
       lineScores.append((index: index, lineID: lineID, text: line, rawScore: score))
     }
 
     let maxScore = lineScores.map(\.rawScore).max() ?? 0.0
+
+    // Threshold check: If query has no semantic match in text, return absent with 0 matches
+    if maxScore < 1.2 {
+      return SemanticFindResult(query: query, existsScore: 0.05, verdict: .absent, matches: [])
+    }
+
+    // Re-score top lines with sentence vector embedding
+    let se = Self.sentenceEmbedding
+    let scoredWithVectors = lineScores
+      .filter { $0.rawScore >= 1.0 }
+      .map { item -> (index: Int, lineID: String, text: String, finalScore: Double) in
+        var finalScore = item.rawScore
+        if let se = se {
+          let dist = se.distance(between: trimmedQuery, and: item.text)
+          if dist < 1.35 {
+            finalScore += (1.35 - dist) * 8.0
+          }
+        }
+        return (item.index, item.lineID, item.text, finalScore)
+      }
+
+    let topRanked = scoredWithVectors.sorted { $0.finalScore > $1.finalScore }
+    let bestFinalScore = topRanked.first?.finalScore ?? maxScore
+
     let existsProb: Double
-    if maxScore >= 8.0 {
+    if bestFinalScore >= 10.0 {
       existsProb = 0.95
-    } else if maxScore >= 4.0 {
-      existsProb = 0.78
-    } else if maxScore >= 2.0 {
-      existsProb = 0.52
-    } else if maxScore > 0.0 {
-      existsProb = 0.36
+    } else if bestFinalScore >= 5.0 {
+      existsProb = 0.80
+    } else if bestFinalScore >= 2.5 {
+      existsProb = 0.58
     } else {
-      existsProb = 0.04
+      existsProb = 0.38
     }
 
     let verdict: SemanticVerdict
-    if existsProb >= 0.70 {
+    if existsProb >= 0.65 {
       verdict = .answered
     } else if existsProb >= 0.35 {
       verdict = .partial
@@ -394,39 +498,33 @@ final class TypeSafeService: @unchecked Sendable {
       return SemanticFindResult(query: query, existsScore: existsProb, verdict: .absent, matches: [])
     }
 
-    let scoredItems = lineScores.filter { $0.rawScore > 0 }
-    let sumScore = scoredItems.map(\.rawScore).reduce(0, +)
-
-    let matches = scoredItems
-      .sorted { $0.rawScore > $1.rawScore }
-      .prefix(maxResults)
-      .map { item -> SemanticMatch in
-        let relevance = sumScore > 0 ? (item.rawScore / sumScore) : 0.0
-        let scaledRelevance = min(0.98, max(0.40, relevance * 1.8))
-        return SemanticMatch(
+    var matches: [SemanticMatch] = []
+    for item in topRanked.prefix(maxResults) {
+      let rel = min(0.98, max(0.50, item.finalScore / 16.0))
+      matches.append(
+        SemanticMatch(
           lineID: item.lineID,
           lineIndex: item.index,
           excerpt: item.text,
-          relevance: scaledRelevance
+          relevance: rel
         )
-      }
+      )
+    }
 
     return SemanticFindResult(
       query: query,
       existsScore: existsProb,
       verdict: verdict,
-      matches: matches
+      matches: matches,
+      isLiveAI: false
     )
   }
 
-  // MARK: - Dramatis Personae & Entity Alignment (Cookbook: entity_alignment)
-  /// Extracts notable characters and lore entities from real book content
+  // MARK: - Character Lore and Dramatis Personae (Cookbook: entity_alignment)
   nonisolated func extractDramatisPersonae(from content: String) -> [CharacterLoreEntity] {
-    guard !content.isEmpty else { return [] }
-
     let knownLore: [String: (name: String, role: String)] = [
-      "time traveller": ("The Time Traveller", "Philosophical scientist and inventor of the Time Machine"),
-      "weena": ("Weena", "Delicate and innocent Eloi saved from a river current"),
+      "time traveller": ("The Time Traveller", "Victorian inventor, physicist, and explorer of four-dimensional space"),
+      "weena": ("Weena", "Gentle Eloi companion rescued from the river in 802,701 AD"),
       "eloi": ("The Eloi", "Graceful, fragile humanoid beings living in communal peace"),
       "morlock": ("The Morlocks", "Subterranean predator species tending underground engines"),
       "darcy": ("Mr. Fitzwilliam Darcy", "Proud, honorable, and wealthy master of Pemberley"),
@@ -443,7 +541,11 @@ final class TypeSafeService: @unchecked Sendable {
       "monster": ("The Creature", "Intelligent yet rejected being yearning for connection"),
       "clerval": ("Henry Clerval", "Devoted companion and scholar of languages"),
       "holmes": ("Sherlock Holmes", "Consulting detective of acute observational deduction"),
-      "watson": ("Dr. John Watson", "Loyal biographer, physician, and companion")
+      "watson": ("Dr. John Watson", "Loyal biographer, physician, and companion"),
+      "valen": ("Commander Valen", "Veteran starship commander leading the Prometheus into deep space"),
+      "kira": ("Lieutenant Kira", "Chief navigation officer and stellar cartographer"),
+      "aris": ("Dr. Aris", "Chief science officer studying temporal distortions and ancient signals"),
+      "prometheus": ("Prometheus AI", "Onboard artificial intelligence managing life support and navigation")
     ]
 
     var foundEntities: [CharacterLoreEntity] = []
@@ -488,13 +590,13 @@ final class TypeSafeService: @unchecked Sendable {
       let topEntities = frequencies
         .filter { $0.value >= 2 }
         .sorted { $0.value > $1.value }
-        .prefix(6)
+        .prefix(4)
 
       for (name, count) in topEntities {
-        if !foundEntities.contains(where: { $0.name.contains(name) }) {
+        if !foundEntities.contains(where: { $0.name.lowercased().contains(name.lowercased()) }) {
           let sentences = content.components(separatedBy: CharacterSet(charactersIn: ".!?\n"))
-          let preview = sentences.first(where: { $0.contains(name) })?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? "Key recurring entity in the text."
+          let preview = sentences.first(where: { $0.localizedCaseInsensitiveContains(name) })?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? "Character appearing across multiple scenes."
 
           foundEntities.append(
             CharacterLoreEntity(
@@ -516,21 +618,42 @@ final class TypeSafeService: @unchecked Sendable {
     let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     guard !trimmed.isEmpty else { return books }
 
+    let queryWords = trimmed.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0.count > 2 }
+    let queryLemmas = extractLemmas(from: trimmed)
+    let we = Self.wordEmbedding
+
     let scored = books.map { book -> (book: Book, score: Double) in
       var score: Double = 0.0
       let titleLower = book.title.lowercased()
       let authorLower = book.author.lowercased()
       let contentLower = String(book.content.prefix(500)).lowercased()
 
-      if titleLower.contains(trimmed) { score += 10.0 }
+      if titleLower.contains(trimmed) { score += 12.0 }
       if authorLower.contains(trimmed) { score += 8.0 }
 
-      let queryWords = trimmed.components(separatedBy: .whitespaces).filter { $0.count > 2 }
       for word in queryWords {
-        if titleLower.contains(word) { score += 3.0 }
-        if authorLower.contains(word) { score += 2.0 }
-        if contentLower.contains(word) { score += 1.0 }
-        if (book.format?.displayName.lowercased().contains(word) ?? false) { score += 1.5 }
+        if titleLower.contains(word) { score += 4.0 }
+        if authorLower.contains(word) { score += 3.0 }
+        if contentLower.contains(word) { score += 2.0 }
+        if (book.format?.displayName.lowercased().contains(word) ?? false) { score += 2.0 }
+      }
+
+      for lemma in queryLemmas {
+        if titleLower.contains(lemma) { score += 3.0 }
+        if contentLower.contains(lemma) { score += 1.5 }
+      }
+
+      // Word embedding semantic distance to book title & content
+      if let we = we {
+        let titleTokens = titleLower.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0.count > 2 }
+        for q in queryWords {
+          for t in titleTokens {
+            let d = we.distance(between: q, and: t)
+            if d < 1.15 {
+              score += (1.15 - d) * 3.0
+            }
+          }
+        }
       }
 
       return (book, score)
@@ -547,6 +670,10 @@ final class TypeSafeService: @unchecked Sendable {
     let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     guard !trimmed.isEmpty else { return books }
 
+    let queryWords = trimmed.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0.count > 2 }
+    let queryLemmas = extractLemmas(from: trimmed)
+    let we = Self.wordEmbedding
+
     let scored = books.map { book -> (book: StoreBook, score: Double) in
       var score: Double = 0.0
       let titleLower = book.title.lowercased()
@@ -559,12 +686,28 @@ final class TypeSafeService: @unchecked Sendable {
       if categoryLower.contains(trimmed) { score += 6.0 }
       if descLower.contains(trimmed) { score += 4.0 }
 
-      let queryWords = trimmed.components(separatedBy: .whitespaces).filter { $0.count > 2 }
       for word in queryWords {
         if titleLower.contains(word) { score += 3.0 }
         if authorLower.contains(word) { score += 2.0 }
         if descLower.contains(word) { score += 1.5 }
-        if categoryLower.contains(word) { score += 2.0 }
+        if categoryLower.contains(word) { score += 2.5 }
+      }
+
+      for lemma in queryLemmas {
+        if categoryLower.contains(lemma) { score += 2.0 }
+        if descLower.contains(lemma) { score += 1.0 }
+      }
+
+      if let we = we {
+        let catTokens = categoryLower.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0.count > 2 }
+        for q in queryWords {
+          for c in catTokens {
+            let d = we.distance(between: q, and: c)
+            if d < 1.15 {
+              score += (1.15 - d) * 3.0
+            }
+          }
+        }
       }
 
       return (book, score)
@@ -578,24 +721,23 @@ final class TypeSafeService: @unchecked Sendable {
 
   nonisolated func recommendStoreBooks(library: [Book], catalog: [StoreBook], limit: Int = 4) -> [StoreBook] {
     guard !catalog.isEmpty else { return [] }
-    let ownedTitles = Set(library.map { $0.title.lowercased() })
-    let unowned = catalog.filter { !ownedTitles.contains($0.title.lowercased()) }
-    guard !unowned.isEmpty else { return [] }
+    let existingTitles = Set(library.map { $0.title.lowercased() })
+    let unreadCatalog = catalog.filter { !existingTitles.contains($0.title.lowercased()) }
 
     var preferredCategories: [String: Int] = [:]
-    for book in library {
-      let t = book.title.lowercased()
-      if t.contains("time") || t.contains("odyssey") || t.contains("space") {
-        preferredCategories["Sci-Fi", default: 0] += 2
-      } else if t.contains("pride") || t.contains("prejudice") || t.contains("wonderland") {
-        preferredCategories["Fiction", default: 0] += 2
-      }
+    for b in library {
+      let cat = b.format?.displayName ?? "Classic"
+      preferredCategories[cat, default: 0] += 1
     }
 
-    let topCategory = preferredCategories.max(by: { $0.value < $1.value })?.key ?? "Fiction"
-    let categoryMatches = unowned.filter { $0.category.localizedCaseInsensitiveContains(topCategory) }
-    let others = unowned.filter { !$0.category.localizedCaseInsensitiveContains(topCategory) }
+    let topCategory = preferredCategories.sorted { $0.value > $1.value }.first?.key ?? "Classic"
 
-    return Array((categoryMatches + others).prefix(limit))
+    let sorted = unreadCatalog.sorted { (b1: StoreBook, b2: StoreBook) -> Bool in
+      let b1Score = (b1.category.contains(topCategory) ? 2.0 : 0.0) + (b1.isWhisperPlusIncluded ? 1.0 : 0.0)
+      let b2Score = (b2.category.contains(topCategory) ? 2.0 : 0.0) + (b2.isWhisperPlusIncluded ? 1.0 : 0.0)
+      return b1Score > b2Score
+    }
+
+    return Array(sorted.prefix(limit))
   }
 }
