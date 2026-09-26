@@ -347,4 +347,145 @@ class MiniZip {
         return UInt32(data[offset]) | (UInt32(data[offset + 1]) << 8) |
                (UInt32(data[offset + 2]) << 16) | (UInt32(data[offset + 3]) << 24)
     }
+    // MARK: - Zip Compression API
+    
+    struct ZipEntry {
+        let path: String
+        let data: Data
+        let uncompressed: Bool
+        
+        init(path: String, data: Data, uncompressed: Bool = false) {
+            self.path = path
+            self.data = data
+            self.uncompressed = uncompressed
+        }
+    }
+    
+    func createZip(entries: [ZipEntry], destination: URL) throws {
+        var zipData = Data()
+        
+        struct CDRecord {
+            let path: String
+            let uncompressedSize: UInt32
+            let compressedSize: UInt32
+            let crc: UInt32
+            let method: UInt16
+            let localHeaderOffset: UInt32
+        }
+        
+        var cdRecords: [CDRecord] = []
+        
+        for entry in entries {
+            guard let pathBytes = entry.path.data(using: .utf8) else { continue }
+            let crc = crc32Checksum(entry.data)
+            let uncompressedSize = UInt32(entry.data.count)
+            let method: UInt16 = entry.uncompressed ? 0 : 8
+            let finalData: Data
+            if entry.uncompressed {
+                finalData = entry.data
+            } else {
+                finalData = compressDeflate(entry.data) ?? entry.data
+            }
+            let compressedSize = UInt32(finalData.count)
+            let localHeaderOffset = UInt32(zipData.count)
+            
+            // Local file header (30 bytes + path length)
+            var lh = Data()
+            var sig: UInt32 = 0x04034b50; lh.append(contentsOf: withUnsafeBytes(of: &sig) { Array($0) })
+            var ver: UInt16 = 20; lh.append(contentsOf: withUnsafeBytes(of: &ver) { Array($0) })
+            var flag: UInt16 = 0x0800; lh.append(contentsOf: withUnsafeBytes(of: &flag) { Array($0) })
+            var meth = method; lh.append(contentsOf: withUnsafeBytes(of: &meth) { Array($0) })
+            var time: UInt16 = 0; lh.append(contentsOf: withUnsafeBytes(of: &time) { Array($0) })
+            var date: UInt16 = 0x5800; lh.append(contentsOf: withUnsafeBytes(of: &date) { Array($0) })
+            var c = crc; lh.append(contentsOf: withUnsafeBytes(of: &c) { Array($0) })
+            var cSize = compressedSize; lh.append(contentsOf: withUnsafeBytes(of: &cSize) { Array($0) })
+            var uSize = uncompressedSize; lh.append(contentsOf: withUnsafeBytes(of: &uSize) { Array($0) })
+            var nLen = UInt16(pathBytes.count); lh.append(contentsOf: withUnsafeBytes(of: &nLen) { Array($0) })
+            var eLen: UInt16 = 0; lh.append(contentsOf: withUnsafeBytes(of: &eLen) { Array($0) })
+            lh.append(pathBytes)
+            lh.append(finalData)
+            
+            zipData.append(lh)
+            
+            cdRecords.append(CDRecord(
+                path: entry.path,
+                uncompressedSize: uncompressedSize,
+                compressedSize: compressedSize,
+                crc: crc,
+                method: method,
+                localHeaderOffset: localHeaderOffset
+            ))
+        }
+        
+        let cdOffset = UInt32(zipData.count)
+        var cdData = Data()
+        
+        for rec in cdRecords {
+            guard let pathBytes = rec.path.data(using: .utf8) else { continue }
+            var sig: UInt32 = 0x02014b50; cdData.append(contentsOf: withUnsafeBytes(of: &sig) { Array($0) })
+            var verMade: UInt16 = 0x031e; cdData.append(contentsOf: withUnsafeBytes(of: &verMade) { Array($0) })
+            var verNeed: UInt16 = 20; cdData.append(contentsOf: withUnsafeBytes(of: &verNeed) { Array($0) })
+            var flag: UInt16 = 0x0800; cdData.append(contentsOf: withUnsafeBytes(of: &flag) { Array($0) })
+            var meth = rec.method; cdData.append(contentsOf: withUnsafeBytes(of: &meth) { Array($0) })
+            var time: UInt16 = 0; cdData.append(contentsOf: withUnsafeBytes(of: &time) { Array($0) })
+            var date: UInt16 = 0x5800; cdData.append(contentsOf: withUnsafeBytes(of: &date) { Array($0) })
+            var c = rec.crc; cdData.append(contentsOf: withUnsafeBytes(of: &c) { Array($0) })
+            var cSize = rec.compressedSize; cdData.append(contentsOf: withUnsafeBytes(of: &cSize) { Array($0) })
+            var uSize = rec.uncompressedSize; cdData.append(contentsOf: withUnsafeBytes(of: &uSize) { Array($0) })
+            var nLen = UInt16(pathBytes.count); cdData.append(contentsOf: withUnsafeBytes(of: &nLen) { Array($0) })
+            var eLen: UInt16 = 0; cdData.append(contentsOf: withUnsafeBytes(of: &eLen) { Array($0) })
+            var commLen: UInt16 = 0; cdData.append(contentsOf: withUnsafeBytes(of: &commLen) { Array($0) })
+            var diskStart: UInt16 = 0; cdData.append(contentsOf: withUnsafeBytes(of: &diskStart) { Array($0) })
+            var intAttr: UInt16 = 0; cdData.append(contentsOf: withUnsafeBytes(of: &intAttr) { Array($0) })
+            var extAttr: UInt32 = 0x81a40000; cdData.append(contentsOf: withUnsafeBytes(of: &extAttr) { Array($0) })
+            var off = rec.localHeaderOffset; cdData.append(contentsOf: withUnsafeBytes(of: &off) { Array($0) })
+            cdData.append(pathBytes)
+        }
+        
+        let cdSize = UInt32(cdData.count)
+        zipData.append(cdData)
+        
+        // End of central directory record
+        var eocd = Data()
+        var eSig: UInt32 = 0x06054b50; eocd.append(contentsOf: withUnsafeBytes(of: &eSig) { Array($0) })
+        var diskNo: UInt16 = 0; eocd.append(contentsOf: withUnsafeBytes(of: &diskNo) { Array($0) })
+        var diskCD: UInt16 = 0; eocd.append(contentsOf: withUnsafeBytes(of: &diskCD) { Array($0) })
+        var numEntries = UInt16(cdRecords.count); eocd.append(contentsOf: withUnsafeBytes(of: &numEntries) { Array($0) })
+        var totalEntries = UInt16(cdRecords.count); eocd.append(contentsOf: withUnsafeBytes(of: &totalEntries) { Array($0) })
+        var sCD = cdSize; eocd.append(contentsOf: withUnsafeBytes(of: &sCD) { Array($0) })
+        var oCD = cdOffset; eocd.append(contentsOf: withUnsafeBytes(of: &oCD) { Array($0) })
+        var cLen: UInt16 = 0; eocd.append(contentsOf: withUnsafeBytes(of: &cLen) { Array($0) })
+        zipData.append(eocd)
+        
+        try zipData.write(to: destination, options: .atomic)
+    }
+    
+    private func crc32Checksum(_ data: Data) -> UInt32 {
+        data.withUnsafeBytes { ptr in
+            UInt32(zlib.crc32(0, ptr.bindMemory(to: Bytef.self).baseAddress, uInt(data.count)))
+        }
+    }
+    
+    private func compressDeflate(_ data: Data) -> Data? {
+        var stream = z_stream()
+        guard deflateInit2_(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -MAX_WBITS, 8, Z_DEFAULT_STRATEGY, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else {
+            return nil
+        }
+        defer { deflateEnd(&stream) }
+        let bound = Int(deflateBound(&stream, uLong(data.count)))
+        let bufferSize = max(bound, 64)
+        var output = Data(count: bufferSize)
+        return data.withUnsafeBytes { inPtr in
+            stream.next_in = UnsafeMutablePointer<Bytef>(mutating: inPtr.bindMemory(to: Bytef.self).baseAddress)
+            stream.avail_in = uInt(data.count)
+            return output.withUnsafeMutableBytes { outPtr in
+                stream.next_out = outPtr.bindMemory(to: Bytef.self).baseAddress
+                stream.avail_out = uInt(bufferSize)
+                guard deflate(&stream, Z_FINISH) == Z_STREAM_END else { return nil }
+                let bytesWritten = bufferSize - Int(stream.avail_out)
+                return Data(bytes: outPtr.baseAddress!, count: bytesWritten)
+            }
+        }
+    }
+
 }

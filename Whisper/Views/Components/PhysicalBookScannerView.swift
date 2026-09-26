@@ -17,11 +17,25 @@ import PhotosUI
 
 /// Physical Book Page Scanner & Neural OCR digitizer.
 /// Uses Apple Vision Neural OCR and VisionKit camera scanner to convert
-/// physical book pages into digital, readable books with liquid glass styling.
+/// physical book pages into genuine, standards-compliant EPUB 3 digital books
+/// or append new pages into previously scanned books.
 struct PhysicalBookScannerView: View {
+    enum ScanMode: String, CaseIterable, Identifiable {
+        case newBook = "New EPUB Book"
+        case appendToExisting = "Append to Existing"
+        
+        var id: String { rawValue }
+    }
+    
+    var initialTargetBook: Book? = nil
+    var onBookCreated: ((Book) -> Void)? = nil
+    
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Query(sort: \Book.lastReadDate, order: .reverse) private var allBooks: [Book]
     
+    @State private var scanMode: ScanMode = .newBook
+    @State private var selectedBookID: UUID? = nil
     @State private var isScanningCamera: Bool = false
     @State private var isProcessingOCR: Bool = false
     @State private var recognizedText: String = ""
@@ -29,13 +43,21 @@ struct PhysicalBookScannerView: View {
     @State private var bookAuthor: String = "Physical Capture"
     @State private var scannedPageCount: Int = 0
     @State private var errorMessage: String? = nil
-    @State private var didCompleteImport: Bool = false
+    
+    #if os(iOS)
+    @State private var capturedImages: [UIImage] = []
+    #endif
     
     #if canImport(PhotosUI) && !os(macOS)
     @State private var selectedPhotoItem: PhotosPickerItem? = nil
     #endif
     
-    var onBookCreated: ((Book) -> Void)? = nil
+    private var selectedTargetBook: Book? {
+        if let id = selectedBookID {
+            return allBooks.first(where: { $0.id == id })
+        }
+        return initialTargetBook ?? allBooks.first
+    }
     
     var body: some View {
         NavigationStack {
@@ -46,6 +68,9 @@ struct PhysicalBookScannerView: View {
                     VStack(spacing: DS.Spacing.xl) {
                         // Hero Visual
                         heroHeader
+                        
+                        // Mode Selection (New EPUB vs Append)
+                        modeSelector
                         
                         // Scanner Action Triggers
                         actionButtons
@@ -61,7 +86,7 @@ struct PhysicalBookScannerView: View {
                     .frame(maxWidth: 600)
                 }
             }
-            .navigationTitle("Scan Physical Book")
+            .navigationTitle(scanMode == .appendToExisting ? "Append Scanned Pages" : "Scan Physical Book")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -74,7 +99,7 @@ struct PhysicalBookScannerView: View {
                 
                 if !recognizedText.isEmpty && !isProcessingOCR {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Save to Library") {
+                        Button(scanMode == .appendToExisting ? "Append & Rebuild EPUB" : "Save as EPUB") {
                             saveScannedBook()
                         }
                         .font(.body.weight(.semibold))
@@ -100,13 +125,25 @@ struct PhysicalBookScannerView: View {
                     if let data = try? await item.loadTransferable(type: Data.self),
                        let uiImage = UIImage(data: data),
                        let cgImage = uiImage.cgImage {
-                        await processSingleCGImage(cgImage)
+                        await processSingleCGImage(cgImage, image: uiImage)
                     }
                 }
             }
             #endif
+            .onAppear {
+                if let target = initialTargetBook {
+                    scanMode = .appendToExisting
+                    selectedBookID = target.id
+                    bookTitle = target.title
+                    bookAuthor = target.author
+                } else if !allBooks.isEmpty && selectedBookID == nil {
+                    selectedBookID = allBooks.first?.id
+                }
+            }
         }
     }
+    
+    // MARK: - UI Components
     
     private var heroHeader: some View {
         VStack(spacing: DS.Spacing.md) {
@@ -115,22 +152,69 @@ struct PhysicalBookScannerView: View {
                     .fill(DS.Colors.accent.opacity(0.12))
                     .frame(width: 80, height: 80)
                 
-                Image(systemName: "camera.viewfinder")
+                Image(systemName: scanMode == .appendToExisting ? "doc.badge.plus" : "camera.viewfinder")
                     .font(.system(size: 36))
                     .foregroundColor(DS.Colors.accent)
             }
             .padding(.top, DS.Spacing.sm)
             
             VStack(spacing: 4) {
-                Text("Digitize Physical Pages")
+                Text(scanMode == .appendToExisting ? "Append Pages to Book" : "Digitize Physical Pages into EPUB")
                     .font(.title3.bold())
                     .foregroundColor(.primary)
                 
-                Text("Point your camera at a physical book page to scan, extract text with Apple Neural OCR, and continue reading in Whisper.")
+                Text(scanMode == .appendToExisting
+                     ? "Scan new physical pages to automatically append them as subsequent chapters into '\(selectedTargetBook?.title ?? "selected book")'."
+                     : "Scan book pages using your camera. Whisper uses Apple Neural OCR to convert them into a standards-compliant EPUB with full reader styling.")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, DS.Spacing.md)
+            }
+        }
+    }
+    
+    private var modeSelector: some View {
+        VStack(spacing: DS.Spacing.sm) {
+            Picker("Mode", selection: $scanMode) {
+                ForEach(ScanMode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            
+            if scanMode == .appendToExisting {
+                HStack {
+                    Text("Target Book:")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    
+                    Spacer()
+                    
+                    Picker("Book", selection: Binding(
+                        get: { selectedBookID ?? allBooks.first?.id },
+                        set: { newID in
+                            selectedBookID = newID
+                            if let b = allBooks.first(where: { $0.id == newID }) {
+                                bookTitle = b.title
+                                bookAuthor = b.author
+                            }
+                        }
+                    )) {
+                        ForEach(allBooks) { b in
+                            Text(b.title).tag(Optional(b.id))
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(DS.Colors.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                        .stroke(DS.Colors.border, lineWidth: 1)
+                )
             }
         }
     }
@@ -143,7 +227,7 @@ struct PhysicalBookScannerView: View {
                     HStack(spacing: 10) {
                         Image(systemName: "doc.viewfinder.fill")
                             .font(.headline)
-                        Text("Start Camera Scanner")
+                        Text(scannedPageCount > 0 ? "Scan More Pages (\(scannedPageCount) Captured)" : "Start Camera Scanner")
                             .font(.headline.weight(.semibold))
                     }
                     .frame(maxWidth: .infinity)
@@ -203,28 +287,52 @@ struct PhysicalBookScannerView: View {
                     .foregroundColor(.green)
                 
                 Spacer()
-            }
-            
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Book Title")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
                 
-                TextField("Book Title", text: $bookTitle)
-                    .textFieldStyle(.roundedBorder)
+                HStack(spacing: 4) {
+                    Image(systemName: "doc.richtext.fill")
+                    Text("EPUB 3")
+                }
+                .font(.caption.bold())
+                .foregroundColor(DS.Colors.accent)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(DS.Colors.accent.opacity(0.12))
+                .clipShape(Capsule())
             }
             
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Author")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+            if scanMode == .newBook {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Book Title")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    TextField("Book Title", text: $bookTitle)
+                        .textFieldStyle(.roundedBorder)
+                }
                 
-                TextField("Author", text: $bookAuthor)
-                    .textFieldStyle(.roundedBorder)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Author")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    TextField("Author", text: $bookAuthor)
+                        .textFieldStyle(.roundedBorder)
+                }
+            } else if let target = selectedTargetBook {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.turn.down.right")
+                        .foregroundColor(.secondary)
+                    Text("Appending to:")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(target.title)
+                        .font(.caption.bold())
+                        .lineLimit(1)
+                }
             }
             
             VStack(alignment: .leading, spacing: 6) {
-                Text("OCR Text Preview")
+                Text("Extracted OCR Text Preview")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 
@@ -253,6 +361,7 @@ struct PhysicalBookScannerView: View {
     private func processScannedPages(_ images: [UIImage]) async {
         isScanningCamera = false
         isProcessingOCR = true
+        self.capturedImages = images
         var fullText = ""
         
         for (i, image) in images.enumerated() {
@@ -269,26 +378,30 @@ struct PhysicalBookScannerView: View {
             self.scannedPageCount = images.count
             self.isProcessingOCR = false
             
-            // Auto-guess title from first non-empty line
-            if let firstLine = fullText.components(separatedBy: .newlines).first(where: { $0.count > 3 && $0.count < 60 }) {
-                self.bookTitle = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if scanMode == .newBook {
+                if let firstLine = fullText.components(separatedBy: .newlines).first(where: { $0.count > 3 && $0.count < 60 }) {
+                    self.bookTitle = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
             }
         }
     }
-    #endif
     
-    private func processSingleCGImage(_ cgImage: CGImage) async {
+    private func processSingleCGImage(_ cgImage: CGImage, image: UIImage) async {
         isProcessingOCR = true
+        self.capturedImages = [image]
         let pageText = await performOCR(on: cgImage)
         await MainActor.run {
             self.recognizedText = pageText
             self.scannedPageCount = 1
             self.isProcessingOCR = false
-            if let firstLine = pageText.components(separatedBy: .newlines).first(where: { $0.count > 3 && $0.count < 60 }) {
-                self.bookTitle = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if scanMode == .newBook {
+                if let firstLine = pageText.components(separatedBy: .newlines).first(where: { $0.count > 3 && $0.count < 60 }) {
+                    self.bookTitle = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
             }
         }
     }
+    #endif
     
     private func performOCR(on cgImage: CGImage) async -> String {
         return await withCheckedContinuation { continuation in
@@ -316,39 +429,84 @@ struct PhysicalBookScannerView: View {
         }
     }
     
+    // MARK: - Save & EPUB Packaging
+    
     private func saveScannedBook() {
-        let title = bookTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Scanned Physical Book" : bookTitle
-        let author = bookAuthor.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Physical Capture" : bookAuthor
-        
-        let newBook = Book(
-            title: title,
-            author: author,
-            coverImageName: "",
-            content: recognizedText,
-            lastReadDate: Date(),
-            progress: 0.0,
-            format: .text
-        )
-        
-        // Save book content to local Documents/Books file
-        if let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-            let booksDir = docs.appendingPathComponent("Books", isDirectory: true)
-            try? FileManager.default.createDirectory(at: booksDir, withIntermediateDirectories: true)
-            let safeName = title.replacingOccurrences(of: "/", with: "-") + ".txt"
-            let fileURL = booksDir.appendingPathComponent(safeName)
-            if let data = recognizedText.data(using: .utf8) {
-                try? data.write(to: fileURL)
-                newBook.url = fileURL
-                CloudSyncService.shared.uploadBookToCloud(fileURL: fileURL)
+        if scanMode == .appendToExisting, let target = selectedTargetBook {
+            // APPEND MODE: Update existing book with new chapters and rebuild EPUB
+            do {
+                #if os(iOS)
+                let _ = try EpubGeneratorService.shared.appendScannedPages(
+                    to: target,
+                    newText: recognizedText,
+                    newImages: capturedImages
+                )
+                #else
+                let _ = try EpubGeneratorService.shared.appendScannedPages(
+                    to: target,
+                    newText: recognizedText
+                )
+                #endif
+                
+                try? modelContext.save()
+                NotificationCenter.default.post(name: .whisperLibraryDidSync, object: nil)
+                onBookCreated?(target)
+                dismiss()
+            } catch {
+                errorMessage = "Failed to append pages: \(error.localizedDescription)"
             }
+            return
         }
         
-        modelContext.insert(newBook)
-        try? modelContext.save()
-        BookService.shared.indexBookInSpotlight(newBook)
+        // NEW BOOK MODE: Generate standards-compliant EPUB 3 archive
+        let title = bookTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Scanned Physical Book" : bookTitle
+        let author = bookAuthor.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Physical Capture" : bookAuthor
+        let bookID = UUID()
         
-        onBookCreated?(newBook)
-        dismiss()
+        let chapters = EpubGeneratorService.shared.parseTextIntoChapters(recognizedText, defaultTitle: "Page 1")
+        
+        do {
+            #if os(iOS)
+            let result = try EpubGeneratorService.shared.generateEpub(
+                title: title,
+                author: author,
+                chapters: chapters,
+                coverImage: capturedImages.first,
+                bookID: bookID
+            )
+            #else
+            let result = try EpubGeneratorService.shared.generateEpub(
+                title: title,
+                author: author,
+                chapters: chapters,
+                bookID: bookID
+            )
+            #endif
+            
+            let newBook = Book(
+                id: bookID,
+                title: title,
+                author: author,
+                coverImageName: result.coverImageName,
+                content: recognizedText,
+                lastReadDate: Date(),
+                progress: 0.0,
+                format: .epub,
+                url: result.epubURL
+            )
+            
+            modelContext.insert(newBook)
+            try? modelContext.save()
+            
+            BookService.shared.indexBookInSpotlight(newBook)
+            CloudSyncService.shared.uploadBookToCloud(fileURL: result.epubURL)
+            NotificationCenter.default.post(name: .whisperLibraryDidSync, object: nil)
+            
+            onBookCreated?(newBook)
+            dismiss()
+        } catch {
+            errorMessage = "Failed to generate EPUB: \(error.localizedDescription)"
+        }
     }
 }
 
@@ -371,7 +529,7 @@ struct VNDocumentCameraRepresentable: UIViewControllerRepresentable {
         Coordinator(onCompletion: onCompletion, onCancel: onCancel)
     }
     
-    final class Coordinator: NSObject, VNDocumentCameraViewControllerDelegate {
+    class Coordinator: NSObject, VNDocumentCameraViewControllerDelegate {
         let onCompletion: ([UIImage]) -> Void
         let onCancel: () -> Void
         

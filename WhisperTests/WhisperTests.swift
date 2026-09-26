@@ -502,4 +502,133 @@ struct WhisperTests {
         #expect(config.reversedClientID.starts(with: "com.googleusercontent.apps."))
         #expect(config.redirectURI.contains(":/oauth2redirect"))
     }
+    // MARK: - EPUB Generator & Scanner Append Mode Tests
+    
+    @Test func testMiniZipCreateZipAndUnzipRoundTrip() async throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("MiniZipTest_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        
+        let zipDest = tempDir.appendingPathComponent("test.zip")
+        let unzipDest = tempDir.appendingPathComponent("unzipped")
+        
+        let file1Content = "application/epub+zip"
+        let file2Content = "<html><body><h1>Hello Whisper</h1></body></html>"
+        
+        let entries = [
+            MiniZip.ZipEntry(path: "mimetype", data: file1Content.data(using: .utf8)!, uncompressed: true),
+            MiniZip.ZipEntry(path: "OEBPS/chapter1.xhtml", data: file2Content.data(using: .utf8)!, uncompressed: false)
+        ]
+        
+        try MiniZip.shared.createZip(entries: entries, destination: zipDest)
+        #expect(FileManager.default.fileExists(atPath: zipDest.path))
+        
+        try MiniZip.shared.unzip(sourceURL: zipDest, destinationURL: unzipDest)
+        
+        let restoredFile1 = unzipDest.appendingPathComponent("mimetype")
+        let restoredFile2 = unzipDest.appendingPathComponent("OEBPS/chapter1.xhtml")
+        
+        #expect(FileManager.default.fileExists(atPath: restoredFile1.path))
+        #expect(FileManager.default.fileExists(atPath: restoredFile2.path))
+        
+        let read1 = try String(contentsOf: restoredFile1, encoding: .utf8)
+        let read2 = try String(contentsOf: restoredFile2, encoding: .utf8)
+        
+        #expect(read1 == file1Content)
+        #expect(read2 == file2Content)
+    }
+    
+    @Test func testEpubGeneratorServiceParseChapters() async throws {
+        let generator = EpubGeneratorService.shared
+        
+        let continuousText = """
+        Introduction paragraph here.
+        
+        --- Page 2 ---
+        
+        This is page two text with more information.
+        
+        --- Page 3 ---
+        
+        Conclusion on page three.
+        """
+        
+        let chapters = generator.parseTextIntoChapters(continuousText, defaultTitle: "Page 1")
+        #expect(chapters.count == 3)
+        #expect(chapters[0].title == "Page 1")
+        #expect(chapters[0].content.contains("Introduction paragraph"))
+        #expect(chapters[1].title == "Page 2")
+        #expect(chapters[1].content.contains("This is page two text"))
+        #expect(chapters[2].title == "Page 3")
+        #expect(chapters[2].content.contains("Conclusion on page three"))
+    }
+    
+    @Test func testEpubGeneratorServiceGenerateEpubArchive() async throws {
+        let generator = EpubGeneratorService.shared
+        let bookID = UUID()
+        let title = "Test Scanned Book"
+        let author = "Test Author"
+        
+        let chapters = [
+            EpubGeneratorService.ChapterInput(title: "Chapter 1", content: "Scanned text for the first chapter."),
+            EpubGeneratorService.ChapterInput(title: "Chapter 2", content: "Scanned text for the second chapter.")
+        ]
+        
+        let result = try generator.generateEpub(
+            title: title,
+            author: author,
+            chapters: chapters,
+            bookID: bookID
+        )
+        
+        #expect(FileManager.default.fileExists(atPath: result.epubURL.path))
+        #expect(FileManager.default.fileExists(atPath: result.bookDir.path))
+        
+        // Verify container.xml
+        let containerURL = result.bookDir.appendingPathComponent("META-INF/container.xml")
+        #expect(FileManager.default.fileExists(atPath: containerURL.path))
+        
+        // Verify content.opf
+        let opfURL = result.bookDir.appendingPathComponent("OEBPS/content.opf")
+        #expect(FileManager.default.fileExists(atPath: opfURL.path))
+        let opfContent = try String(contentsOf: opfURL, encoding: .utf8)
+        #expect(opfContent.contains("Test Scanned Book"))
+        #expect(opfContent.contains("Test Author"))
+        
+        // Verify TOC & Chapters
+        let chap1URL = result.bookDir.appendingPathComponent("OEBPS/chapter_1.xhtml")
+        let chap2URL = result.bookDir.appendingPathComponent("OEBPS/chapter_2.xhtml")
+        #expect(FileManager.default.fileExists(atPath: chap1URL.path))
+        #expect(FileManager.default.fileExists(atPath: chap2URL.path))
+        
+        let parsedBook = EpubParser.shared.parse(sourceURL: result.epubURL)
+        #expect(parsedBook != nil)
+        #expect(parsedBook?.title == title)
+        #expect(parsedBook?.author == author)
+    }
+    
+    @Test func testEpubGeneratorServiceAppendPagesToExistingBook() async throws {
+        let generator = EpubGeneratorService.shared
+        let book = Book(
+            title: "Appendable Notes",
+            author: "Field Researcher",
+            content: "Initial page notes from day 1.",
+            format: .text
+        )
+        
+        let newPageText = "Follow-up notes from day 2 research."
+        let updatedURL = try generator.appendScannedPages(to: book, newText: newPageText)
+        
+        #expect(book.format == .epub)
+        #expect(book.url?.pathExtension == "epub")
+        #expect(FileManager.default.fileExists(atPath: updatedURL.path))
+        #expect(book.content.contains("Initial page notes"))
+        #expect(book.content.contains("Follow-up notes"))
+        
+        // Verify that EPUB parser can parse the updated book with both chapters
+        let parsed = EpubParser.shared.parse(sourceURL: updatedURL)
+        #expect(parsed != nil)
+        #expect(parsed?.title == "Appendable Notes")
+    }
+
 }

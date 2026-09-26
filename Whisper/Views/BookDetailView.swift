@@ -11,6 +11,7 @@ struct BookDetailView: View {
   let book: Book
   @Environment(\.horizontalSizeClass) var hSizeClass
   @State private var navigateToReader: Bool = false
+  @State private var showScannerToAppend: Bool = false
   @ObservedObject private var cloudSync = CloudSyncService.shared
 
   var body: some View {
@@ -18,6 +19,9 @@ struct BookDetailView: View {
       macOSContent
         .navigationDestination(isPresented: $navigateToReader) {
           ReaderView(viewModel: ReaderViewModel(book: book))
+        }
+        .sheet(isPresented: $showScannerToAppend) {
+          PhysicalBookScannerView(initialTargetBook: book)
         }
     #else
       GeometryReader { geometry in
@@ -81,7 +85,7 @@ struct BookDetailView: View {
                 cloudSyncCard
                   .padding(.horizontal)
 
-                primaryActionButton
+                actionButtonsGroup
                   .frame(maxWidth: DS.Layout.maxButtonWidth)
                   .padding(.horizontal)
                   .frame(maxWidth: .infinity)
@@ -114,6 +118,9 @@ struct BookDetailView: View {
       .navigationDestination(isPresented: $navigateToReader) {
         ReaderView(viewModel: ReaderViewModel(book: book))
       }
+      .sheet(isPresented: $showScannerToAppend) {
+        PhysicalBookScannerView(initialTargetBook: book)
+      }
     #endif
   }
 
@@ -130,7 +137,7 @@ struct BookDetailView: View {
             BookCoverView(book: book, showMetadata: false)
               .frame(maxWidth: DS.Layout.maxCoverWidth)
 
-            primaryActionButton
+            actionButtonsGroup
               .frame(maxWidth: DS.Layout.maxButtonWidth)
           }
           .frame(maxWidth: .infinity, alignment: .top)
@@ -149,6 +156,30 @@ struct BookDetailView: View {
 
   private var systemBackground: Color {
     DS.Colors.groupedBackground
+  }
+
+  private var actionButtonsGroup: some View {
+    VStack(spacing: DS.Spacing.sm) {
+      primaryActionButton
+
+      Button(action: { showScannerToAppend = true }) {
+        HStack(spacing: 8) {
+          Image(systemName: "camera.badge.ellipsis")
+          Text("Scan More Pages")
+        }
+        .font(.subheadline.weight(.semibold))
+        .foregroundColor(.primary)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(DS.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
+        .overlay(
+          RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+            .stroke(DS.Colors.border, lineWidth: 1)
+        )
+      }
+      .buttonStyle(.plain)
+    }
   }
 
   private var primaryActionButton: some View {
