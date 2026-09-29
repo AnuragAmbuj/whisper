@@ -64,14 +64,14 @@ That is what Whisper is.
 
 ### What it can do
 
-#### 📖 Read almost anything
+#### Read almost anything
 * **EPUB 2 & 3**: Streaming extraction so 50MB+ books don't hang the UI. You can read in continuous vertical scroll or classic paginated edge-tap mode.
 * **PDFs**: Powered by native `PDFKit`. Full table of contents outline, smooth pinch-to-zoom, and search that actually scrolls to and highlights the matching sentence on the page.
 * **Comics & Manga (`.cbz`, `.cbr`)**: Unpacks images on the fly with low memory usage. You can flip pages horizontally or switch to **Webtoon mode** for seamless vertical scrolling with dynamic zoom.
 * **Plain Text & Markdown**: Minimalist reading with auto-detected `#` headings, paragraph indexing, and comfortable line spacing.
 * **Audiobooks (`.m4b`, `.mp3`, `.m4a`, `.aac`)**: Built-in player with waveform scrubbing, 15-second skip buttons, chapter cue extraction, speed adjustments (0.75x–2.0x), sleep timer, and background playback with lock screen controls.
 
-#### 🧠 Smart Find (Semantic search without the cloud)
+#### Smart Find (Semantic search without the cloud)
 Ever tried searching a 900-page book for a scene you remember, but you can't recall the exact wording? 
 Whisper uses Apple's built-in **Natural Language (`NLEmbedding`)** model right on your device:
 * Type a concept like *"escape from the fortress"* or *"discussion about the ancient map"*.
