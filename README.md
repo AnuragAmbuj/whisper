@@ -43,8 +43,6 @@
 
 </div>
 
----
-
 ### Why I built Whisper
 
 I got tired of having four different reading apps on my phone and iPad.
@@ -59,7 +57,10 @@ I wanted something simple:
 
 That is what Whisper is.
 
----
+#### Open for contribution
+- Feel free to request features. We will get on with it once we establish it will be a great addition.
+- Feel free to raise a PR for any bug you encounter which is yet top be taken care of.
+- Feel free to use Agentic AI for coding, just make sure you test everything on real device manually and have followed best coding/design practices before committing.
 
 ### What it can do
 
@@ -78,24 +79,22 @@ Whisper uses Apple's built-in **Natural Language (`NLEmbedding`)** model right o
 * Tapping a search result jumps straight to that exact chapter, page, or audio timestamp, and highlights the passage with a gentle golden glow for a couple seconds so you can see where you are.
 * It also extracts a **Dramatis Personae** (character list) so you can review who is who in a complex story.
 
-#### 📷 Physical Book Scanner
+#### Physical Book Scanner
 If you are reading a physical paperback and want to save pages to your digital library:
 * Point your camera at the page.
 * It uses Apple's Vision OCR to recognize the text, clean up line breaks, and let you either generate a new EPUB or append the scan as a new chapter to an existing book.
 
-#### ☁️ Simple Cloud Sync
+#### Simple Cloud Sync
 * **iCloud Drive**: Works out of the box. Automatically triggers downloads if files are stored as `.icloud` dataless stubs so the reader never freezes.
 * **Google Drive**: Pure REST client without third-party Google SDKs. Link your account and sync your library folder directly.
 * **Battery-friendly**: Reading positions are debounced and synced when you pause reading or leave the app, rather than bombarding network requests on every scroll.
 
-#### 🎨 Reading Themes
+#### Reading Themes
 Four calibrated color themes designed for real-world lighting:
 * **Paper White** — Clean, neutral daylight reading.
 * **Warm Sepia** — Soft amber hue that is easy on the eyes at night.
 * **Midnight OLED** — Pure `#000000` background for OLED displays.
 * **Forest Moss** — Muted dark sage tone for long study sessions.
-
----
 
 ### Siri & App Shortcuts
 
@@ -107,8 +106,6 @@ Whisper connects to Apple's **App Intents** framework, so you can control it wit
 * *"Hey Siri, bookmark this page in Whisper"* — Saves a bookmark without breaking your reading flow.
 * *"Hey Siri, summarize book in Whisper"* — Generates an on-device synopsis of the current book.
 
----
-
 ### Keyboard Shortcuts (Mac & iPad)
 
 | Key | What it does |
@@ -119,43 +116,6 @@ Whisper connects to Apple's **App Intents** framework, so you can control it wit
 | `⌘W` / `Esc` | Return to library |
 | `Space` | Play / Pause audiobooks |
 | `→` / `←` | Next / Previous page or chapter |
-
----
-
-### Project Structure
-
-```
-Whisper/
-├── Design/           # Design system tokens, glass modifiers, and liquid backgrounds
-├── Helpers/          # MiniZip streaming extractor, ImageCache, WebKitWarmer
-├── Intents/          # AppEntity & AppShortcuts for Siri and Spotlight
-├── Models/           # Book, Bookmark, and AppTheme (SwiftData)
-├── Services/
-│   ├── AudiobookPlayerService.swift # AVFoundation player with lock screen Now Playing
-│   ├── ChapterService.swift         # Universal TOC extractor (EPUB, PDF, CBZ, TXT, Audio)
-│   ├── CloudSyncService.swift       # iCloud sync & dataless file downloader
-│   ├── GoogleDriveSyncService.swift # REST-based Google Drive sync
-│   ├── TypeSafeService.swift        # On-device NLEmbedding semantic search
-│   └── EpubGeneratorService.swift   # Camera OCR text to EPUB synthesizer
-├── ViewModels/       # LibraryViewModel, ReaderViewModel
-└── Views/            # Format readers (Epub, PDFKit, Comic, Text, Audiobook) and UI sheets
-```
-
----
-
-### How to build and run
-
-1. Make sure you have **Xcode 16.0+** and a Mac running **macOS 15.0+**.
-2. Clone this repo:
-   ```bash
-   git clone https://github.com/AnuragAmbuj/whisper.git
-   cd whisper
-   ```
-3. Open `Whisper.xcodeproj` in Xcode.
-4. Select your device or simulator and hit **⌘R** to build and run.
-5. Hit **⌘U** to run the test suite (54/54 unit & UI tests pass).
-
----
 
 ### Privacy
 
