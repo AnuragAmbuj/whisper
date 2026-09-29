@@ -106,14 +106,13 @@ struct ReaderView: View {
         AudiobookPlayerView(
           book: viewModel.book,
           viewModel: viewModel,
-          showControls: $showControls,
-          onDismiss: { dismiss() }
+          showControls: $showControls
         )
       }
 
       // Top Navigation HUD (iOS)
       #if os(iOS)
-      if showControls && (viewModel.book.format ?? .text) != .audiobook {
+      if showControls {
         VStack(spacing: 0) {
           HStack(alignment: .center) {
             // Dismiss / Close Button
@@ -280,6 +279,7 @@ struct ReaderView: View {
     #if os(iOS)
       .navigationBarBackButtonHidden(true)
       .toolbar(.hidden, for: .navigationBar)
+      .toolbar(.hidden, for: .tabBar)
     #else
       .toolbar {
         ToolbarItem(placement: .navigation) {
