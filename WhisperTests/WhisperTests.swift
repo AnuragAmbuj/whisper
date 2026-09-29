@@ -824,4 +824,34 @@ struct WhisperTests {
         }
     }
 
+
+    @Test @MainActor func testAudiobookWaveformScrubberAndFormatting() async throws {
+        // Test padded timestamp formatting matching screenshot (02:45:18 and -05:27:17)
+        let elapsed = 2 * 3600 + 45 * 60 + 18 // 02:45:18
+        let remaining = 5 * 3600 + 27 * 60 + 17 // 05:27:17
+        
+        let elapsedStr = AudiobookPlayerService.formatTimeDisplay(Double(elapsed), forceHours: true)
+        let remainingStr = AudiobookPlayerService.formatTimeDisplay(Double(remaining), forceHours: true)
+        
+        #expect(elapsedStr == "02:45:18")
+        #expect(remainingStr == "05:27:17")
+        
+        // Under one hour without forceHours
+        let shortTime = 12 * 60 + 34 // 12:34
+        let shortStr = AudiobookPlayerService.formatTimeDisplay(Double(shortTime), forceHours: false)
+        #expect(shortStr == "12:34")
+        
+        // Player seek clamping & state
+        let player = AudiobookPlayerService.shared
+        player.duration = 28800.0 // 8 hours
+        player.seek(to: Double(elapsed))
+        #expect(player.currentTime == Double(elapsed))
+        
+        // Clamping bounds
+        player.seek(to: 999999.0)
+        #expect(player.currentTime == player.duration)
+        
+        player.seek(to: -100.0)
+        #expect(player.currentTime == 0.0)
+    }
 }

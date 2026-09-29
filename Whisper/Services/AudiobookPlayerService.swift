@@ -334,4 +334,18 @@ final class AudiobookPlayerService {
             return String(format: "%d:%02d", minutes, secs)
         }
     }
+    
+    static func formatTimeDisplay(_ seconds: Double, forceHours: Bool = false) -> String {
+        guard seconds.isFinite && !seconds.isNaN && seconds >= 0 else { return "00:00" }
+        let totalSecs = Int(seconds)
+        let hours = totalSecs / 3600
+        let minutes = (totalSecs % 3600) / 60
+        let secs = totalSecs % 60
+        
+        if hours > 0 || forceHours {
+            return String(format: "%02d:%02d:%02d", hours, minutes, secs)
+        } else {
+            return String(format: "%02d:%02d", minutes, secs)
+        }
+    }
 }

@@ -106,7 +106,8 @@ struct ReaderView: View {
         AudiobookPlayerView(
           book: viewModel.book,
           viewModel: viewModel,
-          showControls: $showControls
+          showControls: $showControls,
+          onDismiss: { dismiss() }
         )
       }
 
