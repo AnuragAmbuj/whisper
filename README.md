@@ -1,206 +1,171 @@
-# Whisper
+<div align="center">
 
-A free universal e-book and comic reader app for iOS, iPadOS, and macOS with performance optimizations and beautiful UI.
+  <img src="Docs/images/logo.svg" alt="Whisper Logo" width="128" height="128" />
 
-**Status**: Work in Progress - Development in Progress
+  # Whisper
 
-## Features
+  **A sanctuary for your books, comics, and audiobooks.**  
+  *Crafted natively with SwiftUI, AppKit/UIKit, and on-device Apple Intelligence.*
 
-- **Multi-Format Support**: Read EPUB, PDF, CBZ/CBR comics, and plain text files
-- **Universal App**: Native support for iPhone, iPad, and Mac with platform-specific optimizations
-- **Beautiful UI**: Glass-morphism design with liquid animated backgrounds and smooth transitions
-- **High Performance**: Streaming file extraction, image caching, and WebKit pre-warming
-- **Library Management**: Organize your books with search and filtering
-- **Reading Progress**: Automatically saves your reading position across sessions
-- **Bookmarks**: Save and manage bookmarks across all formats
-- **Customizable Reading**: Adjust font size, line spacing, and themes (Light/Dark/Auto)
-- **Fast Imports**: Non-blocking async import with progress indicators
-- **Memory Efficient**: 60% reduction in memory usage during imports
+  [![Platform](https://img.shields.io/badge/Platform-iOS%2018%20%7C%20iPadOS%2018%20%7C%20macOS%2015-black?style=flat-square&logo=apple)](https://developer.apple.com)
+  [![Language](https://img.shields.io/badge/Swift-6.0-F05138?style=flat-square&logo=swift)](https://swift.org)
+  [![SwiftUI](https://img.shields.io/badge/UI-SwiftUI%20Native-007AFF?style=flat-square&logo=swift)](https://developer.apple.com/xcode/swiftui/)
+  [![License](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
 
-## Performance Highlights
+  <br />
 
-- Fast Startup: Animated splash screen with WebKit pre-warming
-- Quick Imports: 2-3 seconds for EPUB files (non-blocking UI)
-- Instant Reader: <1 second load time for cached books
-- Smooth Navigation: 200ms chapter switching
-- Memory Optimized: Streaming extraction prevents crashes on large files
+  <p align="center">
+    <img src="Docs/images/screenshot_library.jpg" alt="Whisper Universal Library" width="380" />
+    &nbsp;&nbsp;&nbsp;&nbsp;
+    <img src="Docs/images/screenshot_reader.jpg" alt="Whisper Reader with TypeSafe AI" width="380" />
+  </p>
 
-## Supported Formats
-
-| Format | Description | Features |
-|--------|-------------|----------|
-| **EPUB** | Electronic Publication | Full parsing of EPUB 2 & 3, TOC navigation, cover extraction, chapter navigation |
-| **PDF** | Portable Document Format | Native rendering, page navigation, metadata extraction |
-| **CBZ** | Comic Book ZIP | Image extraction, page-by-page reading, pinch-to-zoom |
-| **CBR** | Comic Book RAR | Partial support (ZIP-encoded CBR files) |
-| **TXT** | Plain Text | Full text rendering with customizable typography |
-
-### EPUB Reader Features
-- Full EPUB 2.0 & 3.0 support
-- Chapter navigation with TOC
-- Cover image extraction and caching
-- Fast loading from pre-parsed spine.json
-- WebView-based rendering with CSS support
-- Theme integration (in progress)
-
-## Requirements
-
-- iOS 18.0+ / iPadOS 18.0+ / macOS 15.0+
-- Xcode 16.0+
-- Swift 5.9+
-
-## Installation
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/yourusername/Whisper.git
-   ```
-
-2. Open `Whisper.xcodeproj` in Xcode
-
-3. Select your target device/simulator
-
-4. Build and run (Cmd + R)
-
-## Architecture
-
-```
-Whisper/
-├── Design/           # UI design system and modifiers
-│   └── Components/   # Reusable UI components (RoundedCornerShape, etc.)
-├── Helpers/          # Utility classes and performance optimizations
-│   ├── ImageCache.swift      # Async image caching with NSCache
-│   ├── MiniZip.swift         # Streaming ZIP extraction (memory efficient)
-│   └── WebKitWarmer.swift    # WebKit pre-warming for fast loading
-├── Models/           # Data models (Book, Bookmark, AppTheme)
-├── Services/         # Business logic (parsing, import)
-│   ├── ImportService.swift   # Async import processing
-│   ├── EpubParser.swift      # EPUB parsing with streaming
-│   └── ComicParser.swift     # Comic book parsing
-├── ViewModels/       # View state management
-└── Views/            # SwiftUI views
-    ├── Components/   # Reusable UI components
-    │   ├── BookCoverView.swift      # Cached async image loading
-    │   └── SplashScreenView.swift   # Animated splash screen
-    ├── Readers/      # Format-specific reader views
-    │   ├── EpubReaderView.swift    # WebView-based EPUB reader
-    │   ├── TextReaderView.swift    # Custom text rendering
-    │   ├── PDFKitView.swift         # Native PDF rendering
-    │   └── ComicReaderView.swift   # Image-based comic reader
-    ├── LibraryView.swift           # Main library with async imports
-    └── ReaderView.swift            # Unified reader container
-```
-
-### Key Architectural Patterns
-
-#### Performance Pipeline
-```
-Import → Streaming Extraction → Caching → Fast Loading
-    ↓         ↓                    ↓         ↓
-Async   Memory Efficient   NSCache    Pre-warmed
-```
-
-#### Reader Architecture
-```
-ReaderView → Format-Specific Reader → Rendering Engine
-    ↓              ↓                      ↓
-Theme      WebView/Image/PDF      Custom/Native
-```
-
-## Documentation
-
-### Core Documentation
-- **[AGENT.md](./AGENT.md)** - Complete AI agent documentation and development guidelines
-- **[PROJECT_CONTEXT.md](./PROJECT_CONTEXT.md)** - Complete project documentation and technical details
-
-### Architecture Documentation
-See the [Docs](./Docs) folder for detailed documentation:
-
-- [Architecture Overview](./Docs/Architecture.md)
-- [Design System](./Docs/DesignSystem.md)
-- [File Format Support](./Docs/FileFormats.md)
-- [Import & Parsing](./Docs/ImportParsing.md)
-
-### Implementation Details
-- **EPUB Parsing**: Streaming extraction with MiniZip, spine.json for fast loading
-- **Image Caching**: Actor-based NSCache with 50-image limit, 50MB memory limit
-- **WebKit Optimization**: Pre-warming during splash screen for instant reader loading
-- **Async Processing**: Non-blocking imports with progress indicators
-
-## Contributing
-
-### Development Guidelines
-- Follow Swift 6 concurrency patterns
-- Use async/await for I/O operations
-- Platform-specific code with `#if os(...)`
-- Proper error handling with `Result` types
-- Add unit tests for new features
-- Test on both iOS and macOS
-
-### Contribution Workflow
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-### Code Style
-- Use SwiftUI best practices
-- Implement proper memory management
-- Add performance monitoring for file operations
-- Include accessibility features
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-### Frameworks & Technologies
-- **SwiftUI** - Declarative UI framework
-- **WebKit** - EPUB content rendering
-- **PDFKit** - Native PDF rendering
-- **SwiftData** - Data persistence
-- **Foundation** - File operations and networking
-
-### Special Thanks
-- **YeonGyu Kim** - Agent naming and OhMyOpenCode framework
-- **Apple Developer Documentation** - Best practices and guidelines
-- **Open Source Community** - Inspiration and libraries
-
-### Performance Optimizations
-- Streaming file extraction for memory efficiency
-- Actor-based concurrency for thread safety
-- NSCache integration for responsive UI
-- WebKit pre-warming for instant reader loading
+</div>
 
 ---
 
-## Project Status
+## The Philosophy
 
-**Version**: 0.0.12  
-**Status**: Work in Progress - Development in Progress  
-**Last Updated**: January 5, 2026  
+Most modern reading apps are cluttered by bloated web-views, tracking telemetry, subscription paywalls, and fragmented format support. You end up with one app for EPUBs, another for PDFs, a separate reader for manga and comics, and yet another app for audiobooks.
 
-### Completed Features
-- [x] Multi-format support (EPUB, PDF, CBZ, CBR, TXT)
-- [x] High-performance imports with streaming extraction
-- [x] Image caching system
-- [x] WebKit pre-warming
-- [x] Animated splash screen
-- [x] Chapter navigation for EPUB
-- [x] Cross-platform compatibility (iOS/macOS)
-- [x] Swift 6 concurrency compliance
+**Whisper** was designed with a single conviction: **reading should feel calm, fluid, and unified.**
 
-### In Progress
-- [ ] EPUB theme integration (CSS injection)
-- [ ] Font size and reading settings
-- [ ] Pagination system for long chapters
-- [ ] Reading progress within chapters
+Built from the ground up in pure native Swift and SwiftUI, Whisper treats all your literary media—whether an 800-page fantasy novel, an academic PDF paper, an ultra-wide webtoon comic, or a multi-hour narrated audiobook—with the same care, performance, and craftsmanship.
 
-### Planned Features
-- [ ] Cloud sync for reading progress
-- [ ] Dictionary integration
-- [ ] Note-taking and highlighting
-- [ ] Audio book support
-- [ ] Custom themes and fonts
+---
+
+## ✨ Features at a Glance
+
+### 📖 Multi-Format Native Engine
+* **EPUB 2.0 & 3.0**: Fast streaming extraction with zero freeze. Choose between buttery smooth continuous scrolling or paginated edge-tap column reading. Custom typography, line height, and CSS theme injection.
+* **PDFKit Architecture**: High-fidelity PDF rendering with full table of contents hierarchy, continuous scrolling, pinch-to-zoom, and native selection highlights.
+* **Comics & Manga (CBZ / CBR)**: Auto-extracts metadata and page sequences with zero memory spikes. Switch effortlessly between horizontal single/double-page flipping and continuous vertical **Webtoon Mode** with dynamic focal zoom.
+* **Plain Text & Markdown**: Minimalist reading sanctuary with auto-detected chapter headings, paragraph-level indexing, and responsive typography.
+* **Audiobooks (M4B, MP3, M4A, AAC)**: Interactive waveform scrubber, 15-second quick skips, chapter cue markers, sleep timer, background audio playback with lock screen Now Playing metadata, and remote transport controls.
+
+### 🧠 TypeSafe AI Smart Find
+Forget clunky exact-match keyword search. Whisper includes an on-device semantic passage locator powered by Apple’s **Natural Language (`NLEmbedding`)** framework:
+* **Vectorless Semantic Retrieval**: Finds passages based on meaning, concept, or emotional resonance without cloud vector databases or bloated dependencies.
+* **Interactive Navigation**: Tap any semantic search result to jump straight to the exact page, chapter, or audio timestamp.
+* **Visual Glow Feedback**: Matching passages illuminate with a gentle golden pulse and fade gracefully as you read.
+* **Dramatis Personae**: Automatically discovers key figures, recurring characters, and lore entities across entire manuscripts.
+
+### 📸 Physical Book Scanner
+Have a physical paperback? Turn real-world pages into digital EPUBs in seconds:
+* Point your camera with Apple’s **Vision OCR** engine.
+* Whisper cleans, deskews, and structures scanned text into valid EPUB chapters.
+* Append new scans to existing titles or create brand-new standalone books instantly.
+
+### ☁️ Dual-Engine Cloud Sync
+Sync your reading progress, bookmarks, and library files seamlessly across iPhone, iPad, and Mac:
+* **iCloud Drive**: Automatic background sync with support for `.icloud` dataless fault detection and zero-stall automatic downloading.
+* **Direct Google Drive Engine**: Zero-dependency REST-based file sync. Link your folder once and sync your library across platforms without third-party SDK bloat.
+* **Debounced Progress Updates**: Progress is flushed intelligently during reading pauses and view transitions to protect battery life and network bandwidth.
+
+### 🎨 Human Interface & Design System
+* **Whisper Mark**: Our signature icon—a continuous flowing ribbon forming a 'W', an alternating soundwave, and the wings of an open book.
+* **Eye Comfort Themes**: Hand-tuned color palettes engineered for long reading sessions—*Paper White*, *Warm Sepia*, *Midnight OLED (Pure Black)*, and *Forest Moss*.
+* **Refined Glassmorphism**: Translucent frosted toolbars, fluid gestures, and subtle liquid ambient backgrounds that complement your book's artwork.
+
+---
+
+## ⚡ Siri & Apple Intelligence
+
+Whisper is deeply integrated with **App Intents** and Apple Intelligence:
+
+| Voice / Siri Command | What it Does |
+|----------------------|--------------|
+| *"Hey Siri, continue reading in Whisper"* | Resumes your most recent book or audiobook right where you paused. |
+| *"Hey Siri, read Dune in Whisper"* | Searches your library and opens the requested title immediately. |
+| *"Hey Siri, what am I reading in Whisper?"* | Speaks your current title, author, and reading percentage. |
+| *"Hey Siri, bookmark this page in Whisper"* | Saves a bookmark at your exact location without leaving your flow. |
+| *"Hey Siri, summarize book in Whisper"* | Generates a quick AI synopsis of your active book on-device. |
+
+---
+
+## 🏗️ Architecture
+
+```
+Whisper/
+├── Design/
+│   ├── DesignSystem.swift         # Spacing, typography, and color tokens
+│   ├── GlassModifier.swift        # Material glassmorphic view modifiers
+│   └── LiquidBackground.swift     # Smooth ambient background canvas
+├── Helpers/
+│   ├── MiniZip.swift              # High-performance streaming ZIP extraction
+│   ├── ImageCache.swift           # Actor-isolated NSCache system
+│   └── WebKitWarmer.swift         # Pre-warmed WKWebView pool for zero-delay loading
+├── Intents/
+│   ├── BookEntity.swift           # AppEntity for Siri, Spotlight, and Shortcuts
+│   └── WhisperIntents.swift       # Modern AppIntents & AppShortcutsProvider
+├── Models/
+│   ├── Book.swift                 # SwiftData entity with format auto-detection
+│   ├── Bookmark.swift             # Page/chapter/audio timestamp bookmarks
+│   └── AppTheme.swift             # Eye comfort palettes & typography settings
+├── Services/
+│   ├── AudiobookPlayerService.swift # AVFoundation audio player & Now Playing engine
+│   ├── ChapterService.swift       # Universal chapter extraction (EPUB, PDF, Comic, Text, Audio)
+│   ├── CloudSyncService.swift     # iCloud Drive sync & fault downloader
+│   ├── GoogleDriveSyncService.swift # Zero-dependency Google Drive REST engine
+│   ├── TypeSafeService.swift      # On-device NLEmbedding semantic search & Dramatis Personae
+│   ├── EpubGeneratorService.swift # Scanned text to EPUB packager
+│   └── ImportService.swift        # Drag & drop and file import coordinator
+├── ViewModels/
+│   ├── LibraryViewModel.swift     # Filter, search, and category management
+│   └── ReaderViewModel.swift      # Reading progress debouncer & theme manager
+└── Views/
+    ├── BookmarksList.swift        # Unified Chapters, Bookmarks, and Lore inspector
+    ├── LibraryView.swift          # Main grid with cover art and status rings
+    ├── ReaderView.swift           # Unified container directing to format readers
+    └── Readers/
+        ├── AudiobookPlayerView.swift # Native audiobook player & chapter browser
+        ├── ComicReaderView.swift   # Paged & Webtoon reader with zoom metrics
+        ├── EpubReaderView.swift    # WebKit continuous/paginated EPUB reader
+        ├── PDFKitView.swift        # Native PDFKit representable with search jumps
+        └── TextReaderView.swift    # ScrollViewReader paragraph-indexed text reader
+```
+
+---
+
+## 🛠️ Building & Running
+
+### Requirements
+* **macOS 15.0+** (Sequoia)
+* **Xcode 16.0+**
+* **iOS 18.0+** / **iPadOS 18.0+** / **macOS 15.0+** target deployment
+* Swift 6.0 toolchain
+
+### Quick Start
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/anuragambuj/Whisper.git
+   cd Whisper
+   ```
+
+2. Open the Xcode project:
+   ```bash
+   open Whisper.xcodeproj
+   ```
+
+3. Select your target (iPhone, iPad, or Mac Designed for iPad / Native macOS) and press **⌘R** to build and run.
+
+4. Run the test suite:
+   ```bash
+   # In Xcode: Press ⌘U
+   # All 54 unit & UI tests will execute with zero failures.
+   ```
+
+---
+
+## 🔒 Privacy First
+
+Whisper does not contain tracking pixels, analytics SDKs, or cloud telemetry.
+* Your reading habits, notes, and library stay entirely on your devices.
+* Semantic AI searches execute strictly **on-device** using Apple's Neural Engine.
+* Cloud sync communicates directly with your personal iCloud container or your authenticated Google Drive storage.
+
+---
+
+## 📜 License
+
+Whisper is open source software released under the [MIT License](LICENSE).

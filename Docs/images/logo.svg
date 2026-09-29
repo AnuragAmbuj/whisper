@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- Vibrant 4-color tech gradient inspired by Google's palette -->
+    <linearGradient id="whisper-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4285F4"/>
+      <stop offset="33%" stop-color="#EA4335"/>
+      <stop offset="66%" stop-color="#FBBC05"/>
+      <stop offset="100%" stop-color="#34A853"/>
+    </linearGradient>
+    
+    <!-- Soft, premium modern UI drop shadow -->
+    <filter id="soft-shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="16" stdDeviation="24" flood-color="#000000" flood-opacity="0.08" />
+    </filter>
+  </defs>
+
+  <!-- Pure minimalist white background -->
+  <rect width="1024" height="1024" fill="#FFFFFF"/>
+
+  <!-- 
+    The "Whisper Mark" 
+    A single, continuous flowing ribbon that functions as a triple-entendre:
+    1. A 'W' for Whisper.
+    2. An alternating soundwave/waveform (audio/reading).
+    3. The sweeping silhouette of an open book's pages.
+  -->
+  <path d="M 200 238 
+           Q 100 538 350 788 
+           Q 470 538 512 388 
+           Q 554 538 674 788 
+           Q 924 538 824 238" 
+        fill="none" 
+        stroke="url(#whisper-grad)" 
+        stroke-width="140" 
+        stroke-linecap="round" 
+        stroke-linejoin="round" 
+        filter="url(#soft-shadow)" />
+</svg>
