@@ -9,6 +9,7 @@ import Foundation
 import SwiftData
 import UniformTypeIdentifiers
 import PDFKit
+import AVFoundation
 
 #if canImport(UIKit)
 import UIKit
@@ -23,7 +24,7 @@ class ImportService {
     private init() {}
     
     nonisolated static var supportedTypes: [UTType] {
-        var types: [UTType] = [.pdf, .plainText, .zip]
+        var types: [UTType] = [.pdf, .plainText, .zip, .audio, .mp3, .mpeg4Audio]
         
         if let epub = UTType("org.idpf.epub-container") {
             types.append(epub)
@@ -33,6 +34,15 @@ class ImportService {
         }
         if let cbr = UTType("com.macitbetter.cbr-archive") {
             types.append(cbr)
+        }
+        if let m4b = UTType(filenameExtension: "m4b") {
+            types.append(m4b)
+        }
+        if let m4a = UTType(filenameExtension: "m4a") {
+            types.append(m4a)
+        }
+        if let aac = UTType(filenameExtension: "aac") {
+            types.append(aac)
         }
         
         return types
@@ -75,6 +85,8 @@ class ImportService {
             return importComicSync(from: sourceURL, booksDir: booksDir)
         case "txt":
             return importTextSync(from: sourceURL, booksDir: booksDir)
+        case "m4b", "mp3", "m4a", "aac":
+            return importAudiobookSync(from: sourceURL, booksDir: booksDir, documentsDir: documentsDir)
         default:
             print("ImportService: Unsupported format: \(ext)")
             return nil
@@ -128,44 +140,25 @@ class ImportService {
             return nil
         }
         
-        var title = sourceURL.deletingPathExtension().lastPathComponent
-        var author = "Unknown Author"
+        guard let document = PDFDocument(url: destinationURL) else {
+            print("ImportService: Failed to open PDF document")
+            if destinationURL != sourceURL {
+                try? fileManager.removeItem(at: destinationURL)
+            }
+            return nil
+        }
+        
         var coverImageName = ""
-        var pageCount = 0
-        
-        if let document = PDFDocument(url: destinationURL) {
-            pageCount = document.pageCount
-            
-            if let metaTitle = document.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String,
-               !metaTitle.isEmpty {
-                title = metaTitle
-            }
-            if let metaAuthor = document.documentAttributes?[PDFDocumentAttribute.authorAttribute] as? String,
-               !metaAuthor.isEmpty {
-                author = metaAuthor
-            }
-            
-            if let page = document.page(at: 0) {
-                coverImageName = generatePDFCover(from: page, documentsDir: documentsDir)
-            }
+        if let firstPage = document.page(at: 0) {
+            coverImageName = generatePDFCover(from: firstPage, documentsDir: documentsDir)
         }
         
-        // Enhance with TypeSafe metadata extraction if filename is formatted with author/title
-        if author == "Unknown Author" || title == sourceURL.deletingPathExtension().lastPathComponent {
-            let extracted = TypeSafeService.shared.extractCleanMetadata(from: fileName)
-            if title == sourceURL.deletingPathExtension().lastPathComponent && !extracted.title.isEmpty {
-                title = extracted.title
-            }
-            if author == "Unknown Author" && extracted.author != "Unknown Author" {
-                author = extracted.author
-            }
-        }
-        
+        let metadata = TypeSafeService.shared.extractCleanMetadata(from: fileName)
         let book = Book(
-            title: title,
-            author: author,
+            title: metadata.title,
+            author: metadata.author,
             coverImageName: coverImageName,
-            content: "PDF Document - \(pageCount) pages",
+            content: "PDF Document - \(document.pageCount) pages",
             format: .pdf,
             url: destinationURL
         )
@@ -245,6 +238,62 @@ class ImportService {
         )
         
         // Trigger automatic iCloud Drive synchronization
+        CloudSyncService.shared.uploadBookToCloud(fileURL: destinationURL)
+        return book
+    }
+    
+    private func importAudiobookSync(from sourceURL: URL, booksDir: URL, documentsDir: URL) -> Book? {
+        let fileManager = FileManager.default
+        let fileName = sourceURL.lastPathComponent
+        let destinationURL = booksDir.appendingPathComponent(fileName)
+        
+        do {
+            if fileManager.fileExists(atPath: destinationURL.path) && destinationURL != sourceURL {
+                try fileManager.removeItem(at: destinationURL)
+            }
+            if destinationURL != sourceURL {
+                try fileManager.copyItem(at: sourceURL, to: destinationURL)
+            }
+        } catch {
+            print("ImportService: Failed to copy audiobook: \(error)")
+            return nil
+        }
+        
+        var title = ""
+        var author = ""
+        var coverImageName = ""
+        
+        let asset = AVURLAsset(url: destinationURL)
+        let commonMetadata = asset.commonMetadata
+        
+        for item in commonMetadata {
+            if item.commonKey == .commonKeyTitle, let strVal = item.stringValue {
+                title = strVal
+            } else if (item.commonKey == .commonKeyArtist || item.commonKey == .commonKeyAuthor), let strVal = item.stringValue {
+                author = strVal
+            } else if item.commonKey == .commonKeyArtwork, let data = item.dataValue {
+                let imgName = "cover_\(UUID().uuidString).jpg"
+                let imgURL = documentsDir.appendingPathComponent(imgName)
+                try? data.write(to: imgURL)
+                coverImageName = imgName
+            }
+        }
+        
+        if title.isEmpty || author.isEmpty {
+            let extracted = TypeSafeService.shared.extractCleanMetadata(from: fileName)
+            if title.isEmpty { title = extracted.title }
+            if author.isEmpty { author = extracted.author }
+        }
+        
+        let book = Book(
+            title: title,
+            author: author,
+            coverImageName: coverImageName,
+            content: "Audiobook edition: \(title) by \(author)",
+            format: .audiobook,
+            url: destinationURL
+        )
+        
         CloudSyncService.shared.uploadBookToCloud(fileURL: destinationURL)
         return book
     }

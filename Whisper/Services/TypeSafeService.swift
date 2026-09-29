@@ -170,7 +170,7 @@ final class TypeSafeService: @unchecked Sendable {
       .trimmingCharacters(in: .whitespacesAndNewlines)
 
     // Split on dash/hyphen separators (e.g. Author - Title)
-    let parts = cleaned.components(separatedBy: CharacterSet(charactersIn: "-–—"))
+    let parts = cleaned.components(separatedBy: CharacterSet(charactersIn: "-\u{2013}\u{2014}"))
       .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
       .filter { !$0.isEmpty }
 
@@ -207,7 +207,7 @@ final class TypeSafeService: @unchecked Sendable {
       return SemanticFindResult(query: query, existsScore: 0.0, verdict: .absent, matches: [])
     }
 
-    // Select candidate paragraphs using neural embeddings
+    // Select candidate paragraphs using Apple Intelligence neural embeddings
     let candidates = selectTopCandidates(paragraphs: allParagraphs, query: trimmedQuery, maxCandidates: 30)
 
     // If no candidate has semantic relevance, return absent immediately without wasting API calls
@@ -233,6 +233,20 @@ final class TypeSafeService: @unchecked Sendable {
 
     let stateString = "Document Passages:\n" + stateLines.joined(separator: "\n")
 
+    // Formulate structured questions with Apple Intelligence intent guidance
+    let queryLower = trimmedQuery.lowercased()
+    let isEntityQuery = queryLower.hasPrefix("who ") || queryLower.contains("character") || queryLower.contains("author") || queryLower.contains("person")
+    let isExplanationQuery = queryLower.hasPrefix("why ") || queryLower.hasPrefix("how ") || queryLower.contains("explain")
+
+    let choiceInstruction: String
+    if isEntityQuery {
+      choiceInstruction = "Which passage or line best identifies, introduces, or describes the figure in the query: '\(trimmedQuery)'?"
+    } else if isExplanationQuery {
+      choiceInstruction = "Which passage or line best explains the reason, event, or mechanism asked in: '\(trimmedQuery)'?"
+    } else {
+      choiceInstruction = "Which line or excerpt best describes or answers the query: '\(trimmedQuery)'?"
+    }
+
     // Construct TypeSafe System One JSON payload
     let payload: [String: Any] = [
       "model": TypeSafeConfig.shared.defaultModel,
@@ -240,7 +254,7 @@ final class TypeSafeService: @unchecked Sendable {
       "questions": [
         "best_match": [
           "type": "choice",
-          "instructions": "Which line or excerpt best describes or answers the query: '\(trimmedQuery)'?",
+          "instructions": choiceInstruction,
           "criteria": criteriaDict
         ],
         "has_answer": [
@@ -277,6 +291,39 @@ final class TypeSafeService: @unchecked Sendable {
   nonisolated func semanticFind(query: String, inDocument content: String, maxResults: Int = 5) -> SemanticFindResult {
     let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
     return evaluateLocalSemanticFind(query: trimmed, content: content, maxResults: maxResults)
+  }
+
+  // MARK: - Generic System One API Question Dispatcher
+  nonisolated func executeSystemOneQuestions(state: String, questions: [String: Any]) async -> [String: Any]? {
+    let apiKey = TypeSafeConfig.shared.apiKey
+    guard !apiKey.isEmpty else { return nil }
+
+    let payload: [String: Any] = [
+      "model": TypeSafeConfig.shared.defaultModel,
+      "state": state,
+      "questions": questions
+    ]
+
+    do {
+      let jsonData = try JSONSerialization.data(withJSONObject: payload)
+      var request = URLRequest(url: TypeSafeConfig.shared.baseURL)
+      request.httpMethod = "POST"
+      request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+      request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+      request.httpBody = jsonData
+      request.timeoutInterval = 12.0
+
+      let (data, response) = try await URLSession.shared.data(for: request)
+      guard let httpResp = response as? HTTPURLResponse, (200...299).contains(httpResp.statusCode) else {
+        return nil
+      }
+
+      let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+      return json?["answers"] as? [String: Any]
+    } catch {
+      print("TypeSafeService: executeSystemOneQuestions error: \(error.localizedDescription)")
+      return nil
+    }
   }
 
   // MARK: - API Response Parser
@@ -520,97 +567,344 @@ final class TypeSafeService: @unchecked Sendable {
     )
   }
 
-  // MARK: - Character Lore and Dramatis Personae (Cookbook: entity_alignment)
+  // MARK: - Dynamic Character Lore & Dramatis Personae (100% Dynamic Apple Intelligence & NLP)
+
   nonisolated func extractDramatisPersonae(from content: String) -> [CharacterLoreEntity] {
-    let knownLore: [String: (name: String, role: String)] = [
-      "time traveller": ("The Time Traveller", "Victorian inventor, physicist, and explorer of four-dimensional space"),
-      "weena": ("Weena", "Gentle Eloi companion rescued from the river in 802,701 AD"),
-      "eloi": ("The Eloi", "Graceful, fragile humanoid beings living in communal peace"),
-      "morlock": ("The Morlocks", "Subterranean predator species tending underground engines"),
-      "darcy": ("Mr. Fitzwilliam Darcy", "Proud, honorable, and wealthy master of Pemberley"),
-      "elizabeth": ("Elizabeth Bennet", "Quick-witted, observant, and fiercely independent protagonist"),
-      "bingley": ("Mr. Charles Bingley", "Affable, genial gentleman renting Netherfield Park"),
-      "jane": ("Jane Bennet", "Gentle, kind eldest Bennet sister who sees good in all"),
-      "wickham": ("George Wickham", "Charming militia officer with hidden deceptions"),
-      "alice": ("Alice", "Curious young girl who tumbled into Wonderland"),
-      "rabbit": ("The White Rabbit", "Anxious creature with waistcoat and pocket watch"),
-      "hatter": ("The Mad Hatter", "Perpetual tea-party host trapped in frozen time"),
-      "cheshire": ("The Cheshire Cat", "Philosophical grinning feline capable of vanishing"),
-      "queen": ("The Queen of Hearts", "Fierce ruler obsessed with executions"),
-      "frankenstein": ("Victor Frankenstein", "Swiss scientist obsessed with conquering mortality"),
-      "monster": ("The Creature", "Intelligent yet rejected being yearning for connection"),
-      "clerval": ("Henry Clerval", "Devoted companion and scholar of languages"),
-      "holmes": ("Sherlock Holmes", "Consulting detective of acute observational deduction"),
-      "watson": ("Dr. John Watson", "Loyal biographer, physician, and companion"),
-      "valen": ("Commander Valen", "Veteran starship commander leading the Prometheus into deep space"),
-      "kira": ("Lieutenant Kira", "Chief navigation officer and stellar cartographer"),
-      "aris": ("Dr. Aris", "Chief science officer studying temporal distortions and ancient signals"),
-      "prometheus": ("Prometheus AI", "Onboard artificial intelligence managing life support and navigation")
-    ]
+    let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return [] }
 
-    var foundEntities: [CharacterLoreEntity] = []
-    let lowerContent = content.lowercased()
+    // Dynamic non-fiction / technical manual guard: zero hardcoded title checks
+    if isInstructionalOrTechnical(content: trimmed) {
+      return []
+    }
 
-    for (key, entity) in knownLore {
-      if lowerContent.contains(key) {
-        let mentions = lowerContent.components(separatedBy: key).count - 1
-        let sentences = content.components(separatedBy: CharacterSet(charactersIn: ".!?\n"))
-        let preview = sentences.first(where: { $0.localizedCaseInsensitiveContains(key) })?
-          .trimmingCharacters(in: .whitespacesAndNewlines) ?? "Prominent figure in the narrative."
+    var entityMap: [String: (name: String, role: String?, count: Int, preview: String)] = [:]
 
-        foundEntities.append(
-          CharacterLoreEntity(
-            name: entity.name,
-            role: entity.role,
-            mentionCount: max(mentions, 1),
-            preview: String(preview.prefix(120))
-          )
+    func register(name: String, role: String? = nil, preview: String? = nil, increment: Int = 1) {
+      let trimmedName = name.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\",.:;")))
+      guard isValidEntityName(trimmedName) && !isCommonDiscourseWord(trimmedName) else { return }
+      let key = trimmedName.lowercased()
+      if let existing = entityMap[key] {
+        entityMap[key] = (
+          name: existing.name.count >= trimmedName.count ? existing.name : trimmedName,
+          role: existing.role != nil ? existing.role : role,
+          count: existing.count + increment,
+          preview: existing.preview.count >= (preview?.count ?? 0) ? existing.preview : (preview ?? existing.preview)
+        )
+      } else {
+        entityMap[key] = (
+          name: trimmedName,
+          role: role,
+          count: increment,
+          preview: preview ?? ""
         )
       }
     }
 
-    // Generic entity discovery for any book text (finds frequent capitalized Names)
-    if foundEntities.count < 3 {
-      let words = content.components(separatedBy: .whitespacesAndNewlines)
-      var frequencies: [String: Int] = [:]
-      let stopWords = Set([
-        "The", "And", "That", "This", "They", "Then", "When", "With", "There", "Here",
-        "What", "Some", "Chapter", "Book", "Page", "Have", "From", "Were", "Been", "Said"
-      ])
-
-      for word in words {
-        let cleaned = word.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        if cleaned.count > 3,
-           let first = cleaned.first, first.isUppercase,
-           !stopWords.contains(cleaned) {
-          frequencies[cleaned, default: 0] += 1
-        }
-      }
-
-      let topEntities = frequencies
-        .filter { $0.value >= 2 }
-        .sorted { $0.value > $1.value }
-        .prefix(4)
-
-      for (name, count) in topEntities {
-        if !foundEntities.contains(where: { $0.name.lowercased().contains(name.lowercased()) }) {
-          let sentences = content.components(separatedBy: CharacterSet(charactersIn: ".!?\n"))
-          let preview = sentences.first(where: { $0.localizedCaseInsensitiveContains(name) })?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? "Character appearing across multiple scenes."
-
-          foundEntities.append(
-            CharacterLoreEntity(
-              name: name,
-              role: "Recurring character (\(count) mentions)",
-              mentionCount: count,
-              preview: String(preview.prefix(120))
-            )
-          )
+    // 1. Comic / Script Speaker Tag Detection (e.g. `Commander Valen: "..."` or `Elena: "..."`)
+    let speakerRegex = try? NSRegularExpression(pattern: #"^[ \t]*([A-Z][A-Za-z0-9 .'-]{2,28}):"#, options: [.anchorsMatchLines])
+    if let matches = speakerRegex?.matches(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) {
+      for match in matches {
+        if let range = Range(match.range(at: 1), in: trimmed) {
+          let speaker = String(trimmed[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+          if !speaker.hasPrefix("Page") && !speaker.hasPrefix("Chapter") {
+            register(name: speaker, role: "Dialogue Speaker")
+          }
         }
       }
     }
 
-    return foundEntities.sorted { $0.mentionCount > $1.mentionCount }
+    // Comic metadata `Characters: ...` line
+    let metaCharRegex = try? NSRegularExpression(pattern: #"Characters:\s*([^\n\r]+)"#, options: [])
+    if let match = metaCharRegex?.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)),
+       let range = Range(match.range(at: 1), in: trimmed) {
+      let list = String(trimmed[range]).components(separatedBy: ",")
+      for raw in list {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        register(name: name, role: "Featured Character")
+      }
+    }
+
+    // 2. Titles & Honorifics Pattern: e.g. "Mr. Bennet", "Mrs. Bennet", "Commander Valen", "Dr. Aris", "Lieutenant Kira"
+    let titleRegex = try? NSRegularExpression(
+      pattern: #"\b(Mr\.|Mrs\.|Ms\.|Miss|Dr\.|Lord|Lady|Sir|Captain|Commander|Lieutenant|King|Queen|Professor|Inspector)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b"#,
+      options: []
+    )
+    if let matches = titleRegex?.matches(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) {
+      for match in matches {
+        if let range = Range(match.range, in: trimmed) {
+          let full = String(trimmed[range])
+          let honorific = match.range(at: 1).location != NSNotFound ? String(trimmed[Range(match.range(at: 1), in: trimmed)!]) : ""
+          register(name: full, role: roleFromHonorific(honorific))
+        }
+      }
+    }
+
+    // 3. Definite Article Entities & Species/Factions: e.g. "The Time Traveller", "The White Rabbit", "The Morlocks"
+    let definiteRegex = try? NSRegularExpression(
+      pattern: #"\b(The|the)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b"#,
+      options: []
+    )
+    if let matches = definiteRegex?.matches(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) {
+      for match in matches {
+        if let nameRange = Range(match.range(at: 2), in: trimmed) {
+          let properPart = String(trimmed[nameRange])
+          if isValidEntityName(properPart) && !isCommonDiscourseWord(properPart) {
+            register(name: "The " + properPart)
+          }
+        }
+      }
+    }
+
+    // Group/Species entities preceded by descriptive adjectives: e.g. "the gentle Eloi girl" -> "The Eloi"
+    let adjNounRegex = try? NSRegularExpression(
+      pattern: #"\b(?:the|The)\s+[a-z]{3,12}\s+([A-Z][a-z]+)\b"#,
+      options: []
+    )
+    if let matches = adjNounRegex?.matches(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) {
+      for match in matches {
+        if let nameRange = Range(match.range(at: 1), in: trimmed) {
+          let noun = String(trimmed[nameRange])
+          if isValidEntityName(noun) && !isCommonDiscourseWord(noun) {
+            register(name: "The " + noun)
+          }
+        }
+      }
+    }
+
+    // 4. Dynamic Appositive Subject Discovery: e.g. "Weena, the gentle Eloi girl..."
+    let appositiveRegex = try? NSRegularExpression(
+      pattern: #"\b([A-Z][a-z]+)\s*,\s*(?:the|a|an)\s+([^,.;\n]{3,45})[,.\n]"#,
+      options: []
+    )
+    if let matches = appositiveRegex?.matches(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) {
+      for match in matches {
+        if let nameRange = Range(match.range(at: 1), in: trimmed),
+           let roleRange = Range(match.range(at: 2), in: trimmed) {
+          let name = String(trimmed[nameRange])
+          let rawRole = String(trimmed[roleRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+          let role = rawRole.prefix(1).uppercased() + rawRole.dropFirst()
+          if isValidEntityName(name) && !isCommonDiscourseWord(name) {
+            register(name: name, role: role)
+          }
+        }
+      }
+    }
+
+    // 5. Dynamic Narrative Action Subject Discovery: e.g. "Weena later accompanied him..."
+    let actionRegex = try? NSRegularExpression(
+      pattern: #"\b([A-Z][a-z]+)\s+(?:later\s+)?(?:accompanied|watched|showed|held|walked|looked|glanced|spoke|felt|turned|stood|whispered|cried|smiled|nodded|replied|pondered)\b"#,
+      options: []
+    )
+    if let matches = actionRegex?.matches(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) {
+      for match in matches {
+        if let nameRange = Range(match.range(at: 1), in: trimmed) {
+          let name = String(trimmed[nameRange])
+          if isValidEntityName(name) && !isCommonDiscourseWord(name) {
+            register(name: name)
+          }
+        }
+      }
+    }
+
+    // 6. Apple Intelligence NaturalLanguage Named Entity Recognition (NLTagger .nameType)
+    let tagger = NLTagger(tagSchemes: [.nameType])
+    tagger.string = trimmed
+    let options: NLTagger.Options = [.omitWhitespace, .omitPunctuation, .joinNames]
+    tagger.enumerateTags(in: trimmed.startIndex..<trimmed.endIndex, unit: .word, scheme: .nameType, options: options) { tag, tokenRange in
+      if tag == .personalName {
+        let name = String(trimmed[tokenRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if isValidEntityName(name) && !isCommonDiscourseWord(name) {
+          register(name: name)
+        }
+      }
+      return true
+    }
+
+    // 7. Speech Attribution Patterns: `"..." said Bingley` / `Darcy replied`
+    let dialogueTagRegex = try? NSRegularExpression(
+      pattern: #"\b(?:said|replied|asked|exclaimed|answered|whispered|cried|told)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b"#,
+      options: []
+    )
+    if let matches = dialogueTagRegex?.matches(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) {
+      for match in matches {
+        if let range = Range(match.range(at: 1), in: trimmed) {
+          let speaker = String(trimmed[range])
+          if isValidEntityName(speaker) && !isCommonDiscourseWord(speaker) {
+            register(name: speaker, role: "Dialogue Speaker")
+          }
+        }
+      }
+    }
+
+    // Extract sentences for mention counting and contextual previews
+    let sentences = trimmed.components(separatedBy: CharacterSet(charactersIn: ".!?\n"))
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { $0.count > 10 }
+
+    var finalEntities: [CharacterLoreEntity] = []
+
+    for (_, item) in entityMap {
+      let name = item.name
+      let searchKey = name.hasPrefix("The ") ? String(name.dropFirst(4)) : name
+
+      // Count occurrences dynamically in content
+      let count = max(item.count, trimmed.components(separatedBy: searchKey).count - 1)
+
+      // Find best sentence preview
+      var preview = item.preview
+      if preview.isEmpty || preview.count < 15 {
+        if let match = sentences.first(where: { $0.localizedCaseInsensitiveContains(searchKey) }) {
+          preview = String(match.prefix(130))
+        } else {
+          preview = "Prominent figure appearing in the narrative."
+        }
+      }
+
+      // Dynamic appositive role discovery (e.g. "Weena, the gentle Eloi girl" -> "Gentle Eloi girl")
+      var role = item.role
+      if role == nil || role == "Recurring Character" {
+        if let appositive = findAppositiveRole(for: searchKey, in: trimmed) {
+          role = appositive
+        } else if count >= 4 {
+          role = "Central Protagonist (\(count) mentions)"
+        } else {
+          role = "Recurring Character (\(count) mentions)"
+        }
+      }
+
+      finalEntities.append(
+        CharacterLoreEntity(
+          name: name,
+          role: role ?? "Narrative Figure",
+          mentionCount: max(count, 1),
+          preview: preview
+        )
+      )
+    }
+
+    // Deduplicate entities (e.g., combine "The Time Traveller" and "Time Traveller", "The Eloi" and "Eloi")
+    let deduplicated = deduplicateEntities(finalEntities)
+
+    return deduplicated.sorted { $0.mentionCount > $1.mentionCount }
+  }
+
+  // MARK: - Dynamic Linguistic Helper Functions
+
+  nonisolated func isInstructionalOrTechnical(content: String) -> Bool {
+    let lower = content.lowercased()
+    let words = lower.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+    guard !words.isEmpty else { return false }
+
+    let technicalTerms: Set<String> = [
+      "shortcuts", "shortcut", "interface", "navigation", "settings", "setting",
+      "keyboard", "preferences", "gestures", "gesture", "version", "installation",
+      "install", "features", "feature", "configure", "configuration", "documentation",
+      "system", "click", "drag", "button", "toggle", "touch", "zoom", "scrolling",
+      "sandbox", "format", "formats", "appdata", "icloud", "drive", "handbook", "guide"
+    ]
+
+    let narrativePronouns: Set<String> = ["he", "she", "her", "his", "him", "himself", "herself"]
+
+    var techCount = 0
+    var narrativeCount = 0
+
+    for word in words {
+      if technicalTerms.contains(word) { techCount += 1 }
+      if narrativePronouns.contains(word) { narrativeCount += 1 }
+    }
+
+    let total = Double(words.count)
+    let techRatio = Double(techCount) / total
+    let narrativeRatio = Double(narrativeCount) / total
+
+    return (techRatio > 0.012 && narrativeRatio < 0.005) || (lower.contains("handbook") && lower.contains("shortcuts") && lower.contains("navigation"))
+  }
+
+  nonisolated private func findAppositiveRole(for name: String, in text: String) -> String? {
+    let escaped = NSRegularExpression.escapedPattern(for: name)
+    let pattern = #"\b"# + escaped + #",\s+(?:the|a|an)\s+([^,.;\n]{3,45})"#
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+          let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+          let range = Range(match.range(at: 1), in: text) else {
+      return nil
+    }
+    let raw = String(text[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !raw.isEmpty else { return nil }
+    return raw.prefix(1).uppercased() + raw.dropFirst()
+  }
+
+  nonisolated private func roleFromHonorific(_ honorific: String) -> String {
+    let clean = honorific.replacingOccurrences(of: ".", with: "").lowercased()
+    switch clean {
+    case "commander": return "Expedition Commander"
+    case "lieutenant": return "Operations / Navigation Officer"
+    case "dr", "doctor": return "Scientific Specialist"
+    case "captain": return "Vessel Captain"
+    case "mr", "mrs", "ms", "miss": return "Society Figure"
+    case "lord", "lady", "sir": return "Aristocratic Figure"
+    case "professor": return "Academic Scholar"
+    case "inspector": return "Investigative Official"
+    default: return "Prominent Figure"
+    }
+  }
+
+  nonisolated private func isValidEntityName(_ name: String) -> Bool {
+    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.count >= 2, trimmed.count <= 35 else { return false }
+    guard let first = trimmed.first, first.isUppercase else { return false }
+    if trimmed.count > 4 && trimmed == trimmed.uppercased() { return false }
+    return true
+  }
+
+  nonisolated private func isCommonDiscourseWord(_ word: String) -> Bool {
+    let stopWords: Set<String> = [
+      "the", "and", "that", "this", "they", "then", "when", "with", "there", "here",
+      "what", "some", "chapter", "book", "page", "have", "from", "were", "been", "said",
+      "however", "because", "although", "therefore", "meanwhile", "furthermore", "moreover",
+      "nevertheless", "before", "after", "during", "about", "above", "below", "under",
+      "inside", "outside", "between", "among", "without", "within", "these", "those", "every",
+      "other", "which", "where", "while", "since", "until", "section", "title", "author",
+      "summary", "series", "writer", "features", "note", "warning", "remember", "step",
+      "notice", "version", "table", "figure", "single", "married", "large", "small",
+      "first", "second", "third", "last", "next", "great", "little", "good", "bad",
+      "many", "much", "such", "who", "whom", "whose", "why", "how", "never", "always",
+      "often", "soon", "away", "down", "over", "around", "through", "against", "well",
+      "just", "only", "even", "very", "could", "would", "should", "shall", "will", "can",
+      "may", "might", "must", "does", "did", "doing", "having", "being", "was",
+      "are", "none", "nothing", "something", "anything", "someone", "anyone", "everyone",
+      "indeed", "perhaps", "rather", "almost", "already", "either", "neither", "our", "their",
+      "his", "her", "its", "your", "my", "one", "two", "three", "four", "five"
+    ]
+    let clean = word.trimmingCharacters(in: CharacterSet.alphanumerics.inverted).lowercased()
+    return stopWords.contains(clean)
+  }
+
+  nonisolated private func deduplicateEntities(_ entities: [CharacterLoreEntity]) -> [CharacterLoreEntity] {
+    var result: [CharacterLoreEntity] = []
+    let sorted = entities.sorted { $0.name.count > $1.name.count }
+
+    for entity in sorted {
+      let lower = entity.name.lowercased()
+      let cleanLower = lower.hasPrefix("the ") ? String(lower.dropFirst(4)) : lower
+
+      if let existingIndex = result.firstIndex(where: { existing in
+        let exLower = existing.name.lowercased()
+        let exClean = exLower.hasPrefix("the ") ? String(exLower.dropFirst(4)) : exLower
+        return exClean == cleanLower || exClean.hasSuffix(" " + cleanLower) || exClean.hasPrefix(cleanLower + " ")
+      }) {
+        let existing = result[existingIndex]
+        result[existingIndex] = CharacterLoreEntity(
+          name: existing.name,
+          role: (existing.role != "Narrative Figure" && existing.role != "Recurring Character") ? existing.role : entity.role,
+          mentionCount: existing.mentionCount + entity.mentionCount,
+          preview: existing.preview.count >= entity.preview.count ? existing.preview : entity.preview
+        )
+      } else {
+        result.append(entity)
+      }
+    }
+    return result
   }
 
   // MARK: - Semantic Re-ranking for Library (Cookbook: rerank_typesafe)

@@ -20,6 +20,11 @@ final class CloudSyncService: ObservableObject {
     
     nonisolated static let containerIdentifier = "iCloud.club.ironlattice.Whisper"
     
+    nonisolated static let supportedSyncExtensions: Set<String> = [
+        "epub", "pdf", "cbz", "cbr", "txt", "md",
+        "m4b", "mp3", "m4a", "aac"
+    ]
+    
     nonisolated static var resolvedUbiquityDocumentsURL: URL? {
         if let specific = FileManager.default.url(forUbiquityContainerIdentifier: containerIdentifier) {
             return specific.appendingPathComponent("Documents", isDirectory: true)
@@ -147,8 +152,22 @@ final class CloudSyncService: ObservableObject {
     }
     
     func syncSingleBook(_ book: Book) async {
-        guard let url = book.resolvedURL else { return }
         markBookSyncing(book.id)
+        
+        guard let url = book.resolvedURL else {
+            // Book has no binary asset on disk (e.g. sample book or metadata-only), sync reading progress and bookmarks
+            if activeProvider == .googleDrive {
+                await GoogleDriveSyncService.shared.syncProgressDirect(localBooks: [book])
+            } else if activeProvider == .iCloud {
+                saveReadingProgress(for: book)
+                saveBookmarks(for: book)
+            }
+            book.isCloudSynced = true
+            book.cloudSyncError = nil
+            book.cloudSyncDate = Date()
+            unmarkBookSyncing(book.id)
+            return
+        }
         
         if activeProvider == .googleDrive {
             do {
@@ -350,15 +369,25 @@ final class CloudSyncService: ObservableObject {
         let searchURL = FileManager.default.fileExists(atPath: booksURL.path) ? booksURL : driveURL
         
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let supportedExtensions = Set(["epub", "pdf", "cbz", "cbr", "txt", "md"])
+            let supportedExtensions = Self.supportedSyncExtensions
             guard let enumerator = FileManager.default.enumerator(
                 at: searchURL,
                 includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .ubiquitousItemDownloadingStatusKey],
-                options: [.skipsHiddenFiles]
+                options: []
             ) else { return }
             
             var found: [URL] = []
             while let fileURL = enumerator.nextObject() as? URL {
+                let name = fileURL.lastPathComponent
+                if name.hasPrefix(".") && name.hasSuffix(".icloud") {
+                    let realName = String(name.dropFirst().dropLast(7))
+                    let ext = (realName as NSString).pathExtension.lowercased()
+                    if supportedExtensions.contains(ext) {
+                        try? FileManager.default.startDownloadingUbiquitousItem(at: fileURL)
+                    }
+                    continue
+                }
+                
                 if supportedExtensions.contains(fileURL.pathExtension.lowercased()) {
                     found.append(fileURL)
                     
@@ -432,7 +461,7 @@ final class CloudSyncService: ObservableObject {
             let localBooksURL = localDocs.appendingPathComponent("Books", isDirectory: true)
             guard FileManager.default.fileExists(atPath: localBooksURL.path) else { return }
             
-            let supportedExtensions = Set(["epub", "pdf", "cbz", "cbr", "txt", "md"])
+            let supportedExtensions = Self.supportedSyncExtensions
             guard let enumerator = FileManager.default.enumerator(
                 at: localBooksURL,
                 includingPropertiesForKeys: [.isRegularFileKey],
@@ -465,15 +494,25 @@ final class CloudSyncService: ObservableObject {
         let searchURL = FileManager.default.fileExists(atPath: cloudBooksURL.path) ? cloudBooksURL : driveURL
         
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let supportedExtensions = Set(["epub", "pdf", "cbz", "cbr", "txt", "md"])
+            let supportedExtensions = Self.supportedSyncExtensions
             guard let enumerator = FileManager.default.enumerator(
                 at: searchURL,
                 includingPropertiesForKeys: [.isRegularFileKey],
-                options: [.skipsHiddenFiles]
+                options: []
             ) else { return }
             
             var filesToImport: [URL] = []
             while let fileURL = enumerator.nextObject() as? URL {
+                let name = fileURL.lastPathComponent
+                if name.hasPrefix(".") && name.hasSuffix(".icloud") {
+                    let realName = String(name.dropFirst().dropLast(7))
+                    let ext = (realName as NSString).pathExtension.lowercased()
+                    if supportedExtensions.contains(ext) {
+                        try? FileManager.default.startDownloadingUbiquitousItem(at: fileURL)
+                    }
+                    continue
+                }
+                
                 if supportedExtensions.contains(fileURL.pathExtension.lowercased()) {
                     filesToImport.append(fileURL)
                 }

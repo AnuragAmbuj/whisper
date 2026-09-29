@@ -75,6 +75,7 @@ struct WhisperMarkAnimatedView: View {
   var autoStart: Bool = true
   var onComplete: (() -> Void)? = nil
 
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var strokeProgress: CGFloat = 0.0
   @State private var glowOpacity: Double = 0.0
   @State private var scale: CGFloat = 0.96
@@ -111,6 +112,14 @@ struct WhisperMarkAnimatedView: View {
   }
 
   func startAnimation() {
+    if reduceMotion {
+      strokeProgress = 1.0
+      glowOpacity = 1.0
+      scale = 1.0
+      onComplete?()
+      return
+    }
+
     strokeProgress = 0.0
     glowOpacity = 0.0
     scale = 0.96
@@ -144,6 +153,7 @@ struct WhisperMarkLoaderView: View {
   var style: Style = .wave
   var showTrack: Bool = true
 
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var trimStart: CGFloat = 0.0
   @State private var trimEnd: CGFloat = 0.0
   @State private var isSpinning: Bool = false
@@ -176,6 +186,12 @@ struct WhisperMarkLoaderView: View {
   }
 
   private func startLoopingAnimation() {
+    if reduceMotion {
+      trimStart = 0.0
+      trimEnd = 1.0
+      return
+    }
+
     switch style {
     case .wave:
       // Smooth continuous wave: head leads, tail follows

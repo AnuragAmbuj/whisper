@@ -162,31 +162,35 @@ struct BookDetailView: View {
     VStack(spacing: DS.Spacing.sm) {
       primaryActionButton
 
-      Button(action: { showScannerToAppend = true }) {
-        HStack(spacing: 8) {
-          Image(systemName: "camera.badge.ellipsis")
-          Text("Scan More Pages")
+      if (book.format ?? .text) != .audiobook {
+        Button(action: { showScannerToAppend = true }) {
+          HStack(spacing: 8) {
+            Image(systemName: "camera.badge.ellipsis")
+            Text("Scan More Pages")
+          }
+          .font(.subheadline.weight(.semibold))
+          .foregroundColor(.primary)
+          .frame(maxWidth: .infinity)
+          .padding(.vertical, 12)
+          .background(DS.Colors.cardBackground)
+          .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
+          .overlay(
+            RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+              .stroke(DS.Colors.border, lineWidth: 1)
+          )
         }
-        .font(.subheadline.weight(.semibold))
-        .foregroundColor(.primary)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .background(DS.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
-        .overlay(
-          RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
-            .stroke(DS.Colors.border, lineWidth: 1)
-        )
+        .buttonStyle(.plain)
       }
-      .buttonStyle(.plain)
     }
   }
 
   private var primaryActionButton: some View {
     Button(action: { navigateToReader = true }) {
       HStack(spacing: 8) {
-        Image(systemName: "book.fill")
-        Text(book.progress > 0 ? "Continue Reading" : "Start Reading")
+        Image(systemName: (book.format ?? .text) == .audiobook ? "headphones" : "book.fill")
+        Text((book.format ?? .text) == .audiobook
+             ? (book.progress > 0 ? "Continue Listening" : "Start Listening")
+             : (book.progress > 0 ? "Continue Reading" : "Start Reading"))
       }
       .font(.headline.weight(.semibold))
       .foregroundColor(DS.Colors.onSelection)
@@ -232,8 +236,8 @@ struct BookDetailView: View {
   private var badgesRow: some View {
     HStack(spacing: DS.Spacing.md) {
       HStack(spacing: 4) {
-        Image(systemName: "doc.plaintext")
-        Text((book.format ?? .text).rawValue.uppercased())
+        Image(systemName: (book.format ?? .text).iconName)
+        Text((book.format ?? .text).displayName.uppercased())
       }
       .font(.caption.bold())
       .foregroundColor(.primary)

@@ -27,7 +27,7 @@ final class StoreService {
         }
     }
     
-    let categories = ["All", "Bestsellers", "Sci-Fi", "Comics", "Classics", "Tech"]
+    let categories = ["All", "Bestsellers", "Sci-Fi", "Audiobooks", "Comics", "Classics", "Tech"]
     
     private(set) var catalog: [StoreBook] = []
     
@@ -74,6 +74,19 @@ final class StoreService {
                 format: .epub,
                 pageCount: 496,
                 sampleContent: "I'm asleep. Then I'm not.\n\nI open my eyes. There is a bright, white light. Two circular shapes stare down at me. Robots. No, cameras.\n\n\"What is two plus two?\" a synthesized voice asks from above."
+            ),
+            StoreBook(
+                title: "Steve Jobs: The Exclusive Biography",
+                author: "Walter Isaacson",
+                category: "Audiobooks",
+                summary: "Narrated audio edition detailing the roller-coaster life and searingly intense personality of the creative entrepreneur whose passion for perfection revolutionized multiple industries.",
+                price: "$14.99",
+                isWhisperPlusIncluded: true,
+                rating: 4.9,
+                reviewCount: 22100,
+                format: .audiobook,
+                pageCount: 0,
+                sampleContent: "To the passionate entrepreneur, design is not just what it looks like and feels like. Design is how it works."
             ),
             StoreBook(
                 title: "Cyberpunk: Neon District #1",

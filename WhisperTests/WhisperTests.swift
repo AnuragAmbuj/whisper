@@ -631,4 +631,197 @@ struct WhisperTests {
         #expect(parsed?.title == "Appendable Notes")
     }
 
+    // MARK: - Audiobook Tests
+    
+    @Test @MainActor func testAudiobookBookFormatAndIcon() async throws {
+        let book = Book(
+            title: "The Art of War",
+            author: "Sun Tzu",
+            coverImageName: "",
+            content: "",
+            progress: 0.15,
+            format: .audiobook
+        )
+        #expect(book.format == .audiobook)
+        #expect(book.format?.displayName == "Audiobook")
+        #expect(book.format?.iconName == "headphones")
+        
+        let searchable = book.resolveSearchableContent()
+        #expect(searchable.contains("Narrated audio edition"))
+        #expect(searchable.contains("The Art of War"))
+    }
+    
+    @Test @MainActor func testAudiobookPlayerServiceControls() async throws {
+        let player = AudiobookPlayerService.shared
+        let book = Book(
+            title: "Test Audiobook",
+            author: "Narrator",
+            coverImageName: "",
+            content: "Sample audio",
+            progress: 0.25,
+            format: .audiobook
+        )
+        
+        var recordedProgress: Double?
+        var recordedLocation: Int?
+        player.loadBook(book) { progress, location in
+            recordedProgress = progress
+            recordedLocation = location
+        }
+        
+        #expect(player.duration > 0)
+        #expect(!player.chapters.isEmpty)
+        
+        player.setPlaybackRate(1.5)
+        #expect(player.playbackRate == 1.5)
+        
+        player.seek(to: 120.0)
+        #expect(player.currentTime == 120.0)
+        #expect(recordedLocation == 120)
+        
+        let formatted = AudiobookPlayerService.formatTime(3665)
+        #expect(formatted == "1:01:05")
+        
+        let formattedShort = AudiobookPlayerService.formatTime(125)
+        #expect(formattedShort == "2:05")
+        
+        player.pause()
+        #expect(player.isPlaying == false)
+    }
+    
+    @Test @MainActor func testAudiobookBookmarkFormatting() async throws {
+        let book = Book(
+            title: "Audiobook Bookmarking",
+            author: "Author",
+            content: "Narration content",
+            format: .audiobook
+        )
+        let vm = ReaderViewModel(book: book)
+        vm.updateLocation(185) // 3m 05s
+        vm.toggleBookmark()
+        
+        #expect(vm.isBookmarked == true)
+        #expect(book.safeBookmarks.count == 1)
+        #expect(book.safeBookmarks.first?.note?.contains("3:05") == true)
+    }
+    
+    @Test @MainActor func testLibraryViewModelAudiobookFiltering() async throws {
+        let allBooks = [
+            Book(title: "Audio 1", author: "A", content: "", format: .audiobook),
+            Book(title: "Text 1", author: "B", content: "", format: .text),
+            Book(title: "EPUB 1", author: "C", content: "", format: .epub)
+        ]
+        let vm = LibraryViewModel()
+        #expect(vm.categories.contains("Audiobooks"))
+        
+        vm.selectedCategory = "Audiobooks"
+        let filtered = vm.filterBooks(allBooks)
+        #expect(filtered.count == 1)
+        #expect(filtered.first?.title == "Audio 1")
+    }
+    
+    @Test func testAudiobookCloudSyncSupport() async throws {
+        let exts = CloudSyncService.supportedSyncExtensions
+        #expect(exts.contains("m4b"))
+        #expect(exts.contains("mp3"))
+        #expect(exts.contains("m4a"))
+        #expect(exts.contains("aac"))
+    }
+
+    // MARK: - Multi-Format Navigable Chapters & Smart Find Tests
+
+    @Test @MainActor func testChapterServiceExtractionAcrossFormats() async throws {
+        let chapterService = ChapterService.shared
+
+        // 1. Text Book with Markdown Headings
+        let textContent = """
+        # The First Adventure
+        Once upon a time in a distant land.
+        
+        ## The Hidden Forest
+        Trees whispered ancient tales to passersby.
+        
+        ### The Secret Spring
+        Crystal water flowed into the hidden glade.
+        """
+        let textBook = Book(title: "Text Adventure", author: "Bard", content: textContent, format: .text)
+        let textChapters = chapterService.extractChapters(for: textBook)
+        #expect(textChapters.count >= 3)
+        #expect(textChapters[0].title == "The First Adventure")
+        #expect(textChapters[0].pageOrLocation == 0)
+        #expect(textChapters[1].title == "The Hidden Forest")
+        #expect(textChapters[2].title == "The Secret Spring")
+
+        // 2. Audiobook with Timestamps
+        let audioContent = """
+        00:00 • Introduction & Overture
+        05:30 • Chapter 1: The Gathering Storm
+        12:45 • Chapter 2: The Battle of Whispering Pines
+        """
+        let audioBook = Book(title: "War Chronicles", author: "Historian", content: audioContent, format: .audiobook)
+        let audioChapters = chapterService.extractChapters(for: audioBook)
+        #expect(audioChapters.count == 3)
+        #expect(audioChapters[0].pageOrLocation == 0)
+        #expect(audioChapters[1].pageOrLocation == 330) // 5 * 60 + 30
+        #expect(audioChapters[1].subtitle == "05:30")
+        #expect(audioChapters[2].pageOrLocation == 765) // 12 * 60 + 45
+        #expect(audioChapters[2].subtitle == "12:45")
+
+        // 3. EPUB Book with toc.json
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let sampleTOC = [
+            Chapter(title: "Prelude", path: "prelude.xhtml", pageOrLocation: 0, subtitle: "Chapter 1"),
+            Chapter(title: "The Journey Begins", path: "ch1.xhtml", pageOrLocation: 1, subtitle: "Chapter 2")
+        ]
+        let tocData = try JSONEncoder().encode(sampleTOC)
+        try tocData.write(to: tempDir.appendingPathComponent("toc.json"))
+
+        let epubBook = Book(title: "Sample EPUB", author: "Author", content: "", format: .epub)
+        epubBook.url = tempDir.appendingPathComponent("book.epub")
+        // Create mock extracted dir matching id
+        let bookDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Books/\(epubBook.id.uuidString)")
+        try FileManager.default.createDirectory(at: bookDir, withIntermediateDirectories: true)
+        try tocData.write(to: bookDir.appendingPathComponent("toc.json"))
+        defer { try? FileManager.default.removeItem(at: bookDir) }
+
+        let epubChapters = chapterService.extractChapters(for: epubBook)
+        #expect(epubChapters.count == 2)
+        #expect(epubChapters[0].title == "Prelude")
+        #expect(epubChapters[1].title == "The Journey Begins")
+        #expect(epubChapters[1].pageOrLocation == 1)
+    }
+
+    @Test @MainActor func testTypeSafeSmartFindNavigableExtraction() async throws {
+        // 1. PDF/Comic [Page X] Pattern
+        let comicExcerpt = "[Page 14] The hero leaps across the rooftop!"
+        let pagePattern = #"(?:\[Page|Page)\s+(\d+)"#
+        let regex = try NSRegularExpression(pattern: pagePattern, options: .caseInsensitive)
+        let match = regex.firstMatch(in: comicExcerpt, range: NSRange(comicExcerpt.startIndex..., in: comicExcerpt))
+        #expect(match != nil)
+        if let match = match, let range = Range(match.range(at: 1), in: comicExcerpt) {
+            let pageNum = Int(comicExcerpt[range])!
+            let targetIndex = max(0, pageNum - 1)
+            #expect(targetIndex == 13)
+        }
+
+        // 2. Audiobook Timestamp Pattern
+        let audioExcerpt = "At 07:45 the narrator describes the midnight crossing."
+        let timePattern = #"(\d{1,2}):(\d{2})(?::(\d{2}))?"#
+        let timeRegex = try NSRegularExpression(pattern: timePattern, options: [])
+        let timeMatch = timeRegex.firstMatch(in: audioExcerpt, range: NSRange(audioExcerpt.startIndex..., in: audioExcerpt))
+        #expect(timeMatch != nil)
+        if let timeMatch = timeMatch,
+           let r1 = Range(timeMatch.range(at: 1), in: audioExcerpt),
+           let r2 = Range(timeMatch.range(at: 2), in: audioExcerpt) {
+            let m = Int(audioExcerpt[r1])!
+            let s = Int(audioExcerpt[r2])!
+            let totalSecs = Double(m * 60 + s)
+            #expect(totalSecs == 465.0) // 7 * 60 + 45 = 465
+        }
+    }
+
 }

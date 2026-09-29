@@ -81,7 +81,7 @@ struct StoreView: View {
         .alert("Added to Library", isPresented: $showPurchasedAlert) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("\"\(purchasedBookTitle)\" is ready to read in your Library.")
+            Text("\"\(purchasedBookTitle)\" is ready in your Library.")
         }
     }
     
@@ -107,7 +107,7 @@ struct StoreView: View {
                     .foregroundColor(.primary)
             }
             
-            Text(storeService.isWhisperPlusSubscribed ? "Unlimited access to all Whisper+ books & audiobooks is unlocked." : "Read 50,000+ books, comics, and magazines without limits.")
+            Text(storeService.isWhisperPlusSubscribed ? "Unlimited access to all Whisper+ ebooks, comics, and audiobooks is unlocked." : "Read & listen to 50,000+ books, comics, and audiobooks without limits.")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .lineLimit(2)
@@ -127,6 +127,7 @@ struct StoreView: View {
                         .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(storeService.isWhisperPlusSubscribed ? "Manage Whisper+ subscription plan" : "Try Whisper+ 1 month free trial")
             }
             .padding(.top, 4)
         }
@@ -165,7 +166,7 @@ struct StoreView: View {
                                             .stroke(DS.Colors.border, lineWidth: 1)
                                     )
                                     .overlay {
-                                        Image(systemName: "book.pages")
+                                        Image(systemName: book.format.iconName)
                                             .foregroundColor(.secondary)
                                     }
                                 Text(book.title)
@@ -180,6 +181,7 @@ struct StoreView: View {
                             .frame(width: 100)
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("Recommended: \(book.title) by \(book.author)")
                     }
                 }
                 .padding(.horizontal)
@@ -217,6 +219,8 @@ struct StoreView: View {
                             )
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Filter category \(cat)")
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                     .onHover { hovering in
                         withAnimation(.easeInOut(duration: 0.12)) {
                             hoveredCategory = hovering ? cat : nil
@@ -281,7 +285,7 @@ private struct StoreBookItemView: View {
                     )
                     .overlay {
                         VStack(spacing: 8) {
-                            Image(systemName: "book.closed")
+                            Image(systemName: book.format.iconName)
                                 .font(.system(size: 28))
                                 .foregroundColor(.secondary)
                             Text(book.title)
@@ -297,7 +301,7 @@ private struct StoreBookItemView: View {
                     }
                 
                 // Format badge
-                Text(book.format.rawValue.uppercased())
+                Text(book.format.displayName.uppercased())
                     .font(.system(size: 9, weight: .bold))
                     .foregroundColor(.secondary)
                     .padding(.horizontal, 5)
@@ -310,6 +314,10 @@ private struct StoreBookItemView: View {
                     )
                     .padding(6)
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(book.title) by \(book.author), format \(book.format.displayName)")
+            .accessibilityHint("Double-tap to view details")
+            .accessibilityAddTraits(.isButton)
             
             // Details
             VStack(alignment: .leading, spacing: 2) {
@@ -341,7 +349,7 @@ private struct StoreBookItemView: View {
                             Text("In Library")
                         } else if isWhisperPlusActive && book.isWhisperPlusIncluded {
                             Image(systemName: "sparkles")
-                            Text("Read")
+                            Text(book.format == .audiobook ? "Listen" : "Read")
                         } else {
                             Text(book.price)
                         }
@@ -355,6 +363,10 @@ private struct StoreBookItemView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isAlreadyOwned)
+                .accessibilityLabel(
+                    isAlreadyOwned ? "\(book.title) is already in your library" :
+                    (isWhisperPlusActive && book.isWhisperPlusIncluded ? (book.format == .audiobook ? "Listen to \(book.title) with Whisper+" : "Read \(book.title) with Whisper+") : "Buy \(book.title) for \(book.price)")
+                )
                 .padding(.top, 4)
             }
             .padding(.horizontal, 2)
@@ -383,18 +395,18 @@ private struct StoreBookDetailSheet: View {
                         )
                         .overlay {
                             VStack(spacing: 8) {
-                                Image(systemName: "book.pages.fill")
+                                Image(systemName: storeBook.format.iconName)
                                     .font(.largeTitle)
                                     .foregroundColor(.primary)
                                 Text(storeBook.title)
                                     .font(.headline)
                                     .foregroundColor(.primary)
                                     .multilineTextAlignment(.center)
-                                    .padding(.horizontal)
+                                    .padding(.horizontal, 12)
                             }
                         }
                     
-                    VStack(spacing: 4) {
+                    VStack(spacing: DS.Spacing.xs) {
                         Text(storeBook.title)
                             .font(.title2.bold())
                             .foregroundColor(.primary)
@@ -403,66 +415,46 @@ private struct StoreBookDetailSheet: View {
                         Text(storeBook.author)
                             .font(.subheadline)
                             .foregroundColor(.secondary)
-                    }
-                    
-                    HStack(spacing: DS.Spacing.xxl) {
-                        VStack(spacing: 2) {
-                            HStack(spacing: 2) {
+                        
+                        HStack(spacing: 12) {
+                            HStack(spacing: 4) {
                                 Image(systemName: "star.fill")
                                     .foregroundColor(.yellow)
+                                    .font(.caption)
                                 Text(String(format: "%.1f", storeBook.rating))
-                                    .bold()
+                                    .font(.caption.bold())
+                                    .foregroundColor(.primary)
                             }
-                            Text("\(storeBook.reviewCount) reviews")
-                                .font(.caption2)
+                            
+                            Text("•")
+                                .foregroundColor(.secondary)
+                            
+                            Text(storeBook.category)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            
+                            Text("•")
+                                .foregroundColor(.secondary)
+                            
+                            Text(storeBook.format.displayName.uppercased())
+                                .font(.caption.bold())
                                 .foregroundColor(.secondary)
                         }
-                        
-                        Divider().frame(height: 28)
-                        
-                        VStack(spacing: 2) {
-                            Text("\(storeBook.pageCount)")
-                                .bold()
-                            Text("Pages")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
-                        
-                        Divider().frame(height: 28)
-                        
-                        VStack(spacing: 2) {
-                            Text(storeBook.format.rawValue.uppercased())
-                                .bold()
-                            Text("Format")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
+                        .padding(.top, 4)
                     }
-                    .padding()
-                    .background(DS.Colors.cardBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
-                            .stroke(DS.Colors.border, lineWidth: 1)
-                    )
                     
-                    VStack(alignment: .leading, spacing: DS.Spacing.sm) {
-                        Text("About This Book")
-                            .font(.headline)
-                        Text(storeBook.summary)
-                            .font(.body)
-                            .foregroundColor(.secondary)
-                            .lineSpacing(4)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal)
+                    Text(storeBook.summary)
+                        .font(.body)
+                        .foregroundColor(.primary.opacity(0.85))
+                        .lineSpacing(4)
+                        .padding(.horizontal)
                     
                     Button(action: {
                         onPurchase()
                         dismiss()
                     }) {
-                        Text("Buy for \(storeBook.price)")
-                            .font(.headline.weight(.semibold))
+                        Text("Add to Library - \(storeBook.price)")
+                            .font(.headline.bold())
                             .foregroundColor(DS.Colors.onSelection)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
@@ -470,24 +462,20 @@ private struct StoreBookDetailSheet: View {
                             .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Add \(storeBook.title) to library for \(storeBook.price)")
                     .padding(.horizontal)
-                    .padding(.bottom, DS.Spacing.xl)
+                    .padding(.top, DS.Spacing.md)
                 }
-                .padding(.top, DS.Spacing.lg)
+                .padding(.vertical, DS.Spacing.xxl)
             }
-            .navigationTitle("Details")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
+            .background(DS.Colors.background.ignoresSafeArea())
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
+                    Button("Close") {
+                        dismiss()
+                    }
                 }
             }
         }
     }
-}
-
-#Preview {
-    StoreView()
 }

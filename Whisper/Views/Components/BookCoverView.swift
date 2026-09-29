@@ -44,6 +44,10 @@ struct BookCoverView: View {
             }
         }
         .frame(maxWidth: DS.Layout.gridItemMax)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(book.title)\(book.author.isEmpty ? "" : " by " + book.author)")
+        .accessibilityValue(book.progress > 0 ? "\(Int(book.progress * 100)) percent completed" : "Unread")
+        .accessibilityHint("Open and read \(book.title)")
     }
     
     private var coverImage: some View {
@@ -89,6 +93,7 @@ struct BookCoverView: View {
     private var cloudSyncBadge: some View {
         if cloudSync.activeProvider != .disabled {
             let status = cloudSync.syncStatus(for: book)
+            let isGDrive = cloudSync.activeProvider == .googleDrive
             switch status {
             case .syncing:
                 ProgressView()
@@ -98,21 +103,21 @@ struct BookCoverView: View {
                     .background(.ultraThinMaterial)
                     .clipShape(Circle())
             case .synced:
-                Image(systemName: "checkmark.icloud.fill")
+                Image(systemName: isGDrive ? "checkmark.circle.fill" : "checkmark.icloud.fill")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundColor(.green)
                     .padding(4)
                     .background(.ultraThinMaterial)
                     .clipShape(Circle())
             case .failed:
-                Image(systemName: "exclamationmark.icloud.fill")
+                Image(systemName: isGDrive ? "exclamationmark.circle.fill" : "exclamationmark.icloud.fill")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundColor(.orange)
                     .padding(4)
                     .background(.ultraThinMaterial)
                     .clipShape(Circle())
             case .pending:
-                Image(systemName: "icloud.and.arrow.up")
+                Image(systemName: isGDrive ? "arrow.triangle.2.circlepath" : "icloud.and.arrow.up")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(.secondary)
                     .padding(4)
@@ -168,6 +173,7 @@ struct BookCoverView: View {
         case .epub: return "book.closed.fill"
         case .pdf: return "doc.text.fill"
         case .comic: return "photo.stack.fill"
+        case .audiobook: return "headphones"
         case .text: return "text.quote"
         }
     }

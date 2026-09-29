@@ -13,7 +13,7 @@ import SwiftUI
 class LibraryViewModel {
     var searchText: String = ""
     var selectedCategory: String = "All"
-    let categories: [String] = ["All", "EPUB", "PDF", "Comics", "Text"]
+    let categories: [String] = ["All", "Audiobooks", "EPUB", "PDF", "Comics", "Text"]
     
     func filterBooks(_ books: [Book]) -> [Book] {
         var result = books
@@ -22,6 +22,8 @@ class LibraryViewModel {
             result = result.filter { book in
                 let fmt = book.format ?? .text
                 switch selectedCategory {
+                case "Audiobooks":
+                    return fmt == .audiobook
                 case "EPUB":
                     return fmt == .epub
                 case "PDF":

@@ -7,6 +7,7 @@ import SwiftUI
     @Binding var currentPageIndex: Int
     var totalPages: Binding<Int>? = nil
     var theme: AppTheme? = nil
+    var targetSearchSnippet: Binding<String?>? = nil
 
     func makeCoordinator() -> Coordinator {
       Coordinator(self)
@@ -50,11 +51,37 @@ import SwiftUI
       {
         uiView.go(to: page)
       }
+
+      // Handle Smart Find passage localization & highlighting
+      if let snippet = targetSearchSnippet?.wrappedValue,
+         !snippet.isEmpty,
+         snippet != context.coordinator.lastHandledSnippet,
+         let doc = uiView.document {
+        context.coordinator.lastHandledSnippet = snippet
+        let clean = snippet.trimmingCharacters(in: .whitespacesAndNewlines)
+        let terms = [clean, String(clean.prefix(40)), String(clean.prefix(25))]
+        for term in terms where term.count >= 4 {
+          let selections = doc.findString(term, withOptions: .caseInsensitive)
+          if let firstSel = selections.first, let page = firstSel.pages.first {
+            uiView.go(to: page)
+            uiView.setCurrentSelection(firstSel, animate: true)
+            uiView.scrollSelectionToVisible(nil)
+            let pageIdx = doc.index(for: page)
+            if self.currentPageIndex != pageIdx {
+              DispatchQueue.main.async {
+                self.currentPageIndex = pageIdx
+              }
+            }
+            break
+          }
+        }
+      }
     }
 
     class Coordinator: NSObject {
       var parent: PDFKitView
       private var observer: NSObjectProtocol?
+      var lastHandledSnippet: String? = nil
 
       init(_ parent: PDFKitView) {
         self.parent = parent
@@ -88,6 +115,7 @@ import SwiftUI
     @Binding var currentPageIndex: Int
     var totalPages: Binding<Int>? = nil
     var theme: AppTheme? = nil
+    var targetSearchSnippet: Binding<String?>? = nil
 
     func makeCoordinator() -> Coordinator {
       Coordinator(self)
@@ -131,11 +159,37 @@ import SwiftUI
       {
         nsView.go(to: page)
       }
+
+      // Handle Smart Find passage localization & highlighting
+      if let snippet = targetSearchSnippet?.wrappedValue,
+         !snippet.isEmpty,
+         snippet != context.coordinator.lastHandledSnippet,
+         let doc = nsView.document {
+        context.coordinator.lastHandledSnippet = snippet
+        let clean = snippet.trimmingCharacters(in: .whitespacesAndNewlines)
+        let terms = [clean, String(clean.prefix(40)), String(clean.prefix(25))]
+        for term in terms where term.count >= 4 {
+          let selections = doc.findString(term, withOptions: .caseInsensitive)
+          if let firstSel = selections.first, let page = firstSel.pages.first {
+            nsView.go(to: page)
+            nsView.setCurrentSelection(firstSel, animate: true)
+            nsView.scrollSelectionToVisible(nil)
+            let pageIdx = doc.index(for: page)
+            if self.currentPageIndex != pageIdx {
+              DispatchQueue.main.async {
+                self.currentPageIndex = pageIdx
+              }
+            }
+            break
+          }
+        }
+      }
     }
 
     class Coordinator: NSObject {
       var parent: PDFKitView
       private var observer: NSObjectProtocol?
+      var lastHandledSnippet: String? = nil
 
       init(_ parent: PDFKitView) {
         self.parent = parent

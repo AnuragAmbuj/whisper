@@ -14,6 +14,7 @@ struct InteractiveReaderLoaderView: View {
   var theme: AppTheme = .default
   var onSkip: (() -> Void)? = nil
 
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var isFlipping = false
   @State private var pulseScale: CGFloat = 0.95
   @State private var dotCount = 1
@@ -46,9 +47,9 @@ struct InteractiveReaderLoaderView: View {
               )
             )
             .frame(width: 140, height: 140)
-            .scaleEffect(pulseScale)
+            .scaleEffect(reduceMotion ? 1.0 : pulseScale)
             .animation(
-              .easeInOut(duration: 1.4).repeatForever(autoreverses: true),
+              reduceMotion ? .none : .easeInOut(duration: 1.4).repeatForever(autoreverses: true),
               value: pulseScale
             )
 
@@ -106,7 +107,7 @@ struct InteractiveReaderLoaderView: View {
                   .padding(.horizontal, 4)
                 )
                 .rotation3DEffect(
-                  .degrees(isFlipping ? -170 : 0),
+                  .degrees((isFlipping && !reduceMotion) ? -170 : 0),
                   axis: (x: 0, y: 1, z: 0),
                   anchor: .leading,
                   perspective: 0.5
@@ -166,6 +167,7 @@ struct InteractiveReaderLoaderView: View {
       .shadow(color: Color.black.opacity(0.2), radius: 24, x: 0, y: 12)
     }
     .onAppear {
+      guard !reduceMotion else { return }
       pulseScale = 1.15
       withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
         isFlipping = true

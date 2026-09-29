@@ -196,6 +196,7 @@ final class Book {
   /// - EPUB: reads all chapter HTML/XHTML files from `bookDir` and strips tags
   /// - PDF: reads all text from `PDFDocument` pages with page headings
   /// - Comic: reads ComicInfo.xml metadata and extracts page dialogue via OCR
+  /// - Audiobook: reads chapter metadata/synopsis/narration transcript
   func resolveSearchableContent() -> String {
     // 1. Text format: read from file if available, or return stored content
     if format == .text {
@@ -293,10 +294,19 @@ final class Book {
       }
     }
 
+    // 5. Audiobook format: narration transcript / synopsis
+    if format == .audiobook {
+      if !content.isEmpty && !content.hasPrefix("Audiobook -") {
+        return content
+      }
+      return "\(title) by \(author). Narrated audio edition."
+    }
+
     // Fallback: existing content if informative, or title + author
     let isPlaceholder = content.hasPrefix("EPUB Content") ||
       content.hasPrefix("Comic Book -") ||
-      content.hasPrefix("PDF Document -")
+      content.hasPrefix("PDF Document -") ||
+      content.hasPrefix("Audiobook -")
     if !content.isEmpty && !isPlaceholder {
       return content
     }
@@ -324,11 +334,12 @@ final class Book {
   }
 }
 
-enum BookFormat: String, Codable {
+enum BookFormat: String, Codable, CaseIterable {
   case text
   case pdf
   case comic  // CBR/CBZ (Mocked via images)
   case epub
+  case audiobook
 
   var displayName: String {
     switch self {
@@ -336,6 +347,7 @@ enum BookFormat: String, Codable {
     case .pdf: return "PDF Document"
     case .comic: return "Comic Book"
     case .epub: return "EPUB Book"
+    case .audiobook: return "Audiobook"
     }
   }
 
@@ -345,6 +357,7 @@ enum BookFormat: String, Codable {
     case .pdf: return "doc.richtext"
     case .comic: return "photo.on.rectangle.angled"
     case .epub: return "book.closed"
+    case .audiobook: return "headphones"
     }
   }
 }

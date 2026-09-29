@@ -9,14 +9,19 @@ import SwiftUI
 
 struct BookmarksList: View {
     @Bindable var book: Book
+    var currentChapterPath: String? = nil
+    var currentLocation: Int = 0
+    var onSelectChapter: ((Chapter) -> Void)? = nil
     var onSelectBookmark: ((Bookmark) -> Void)? = nil
     var onFindCharacter: ((String) -> Void)? = nil
     @Environment(\.dismiss) var dismiss
     
-    @State private var selectedSection: ReaderInspectorSection = .bookmarks
+    @State private var selectedSection: ReaderInspectorSection = .chapters
+    @State private var chapters: [Chapter] = []
     @State private var entities: [TypeSafeService.CharacterLoreEntity] = []
     
     enum ReaderInspectorSection: String, CaseIterable, Identifiable {
+        case chapters = "Chapters"
         case bookmarks = "Bookmarks"
         case characters = "Characters & Lore"
         
@@ -37,6 +42,8 @@ struct BookmarksList: View {
                 
                 Group {
                     switch selectedSection {
+                    case .chapters:
+                        chaptersListView
                     case .bookmarks:
                         bookmarksListView
                     case .characters:
@@ -56,10 +63,97 @@ struct BookmarksList: View {
                 }
             }
             .onAppear {
+                loadChapters()
                 loadEntities()
             }
         }
         .presentationDetents([.medium, .large])
+    }
+    
+    // MARK: - Chapters List
+    
+    @ViewBuilder
+    private var chaptersListView: some View {
+        if chapters.isEmpty {
+            ContentUnavailableView(
+                "No Chapters Found",
+                systemImage: "list.bullet.rectangle.portrait",
+                description: Text("Table of contents is not available for this book.")
+            )
+        } else {
+            List {
+                ForEach(chapters) { chapter in
+                    Button(action: {
+                        onSelectChapter?(chapter)
+                        dismiss()
+                    }) {
+                        HStack(alignment: .center, spacing: 12) {
+                            Image(systemName: chapterIconName(for: book.format ?? .text))
+                                .font(.body)
+                                .foregroundColor(isChapterActive(chapter) ? DS.Colors.accent : .secondary)
+                                .frame(width: 24)
+                            
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(chapter.title)
+                                    .font(.body.weight(isChapterActive(chapter) ? .semibold : .regular))
+                                    .foregroundColor(isChapterActive(chapter) ? DS.Colors.accent : .primary)
+                                
+                                if let subtitle = chapter.subtitle {
+                                    Text(subtitle)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            
+                            Spacer()
+                            
+                            if isChapterActive(chapter) {
+                                Text("Current")
+                                    .font(.caption2.bold())
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 3)
+                                    .background(Capsule().fill(DS.Colors.accent.opacity(0.15)))
+                                    .foregroundColor(DS.Colors.accent)
+                            } else {
+                                Image(systemName: "chevron.right")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            #if os(iOS)
+            .listStyle(.insetGrouped)
+            #else
+            .listStyle(.inset)
+            #endif
+        }
+    }
+    
+    private func isChapterActive(_ chapter: Chapter) -> Bool {
+        if let path = currentChapterPath, !path.isEmpty {
+            return chapter.path == path || chapter.path.hasSuffix(path) || path.hasSuffix(chapter.path)
+        }
+        return chapter.pageOrLocation == currentLocation
+    }
+    
+    private func chapterIconName(for format: BookFormat) -> String {
+        switch format {
+        case .epub: return "book.pages"
+        case .pdf: return "doc.text"
+        case .comic: return "photo.stack"
+        case .text: return "text.alignleft"
+        case .audiobook: return "headphones"
+        }
+    }
+    
+    private func loadChapters() {
+        if chapters.isEmpty {
+            chapters = ChapterService.shared.extractChapters(for: book)
+        }
     }
     
     // MARK: - Bookmarks List
@@ -130,7 +224,10 @@ struct BookmarksList: View {
             )
         } else {
             List(entities, id: \.name) { entity in
-                LoreRowView(entity: entity)
+                LoreRowView(entity: entity) {
+                    onFindCharacter?(entity.name)
+                    dismiss()
+                }
             }
             #if os(iOS)
             .listStyle(.insetGrouped)
@@ -153,6 +250,10 @@ struct BookmarksList: View {
             return "Page \(bookmark.pageOrLocation + 1)"
         case .epub:
             return "Chapter \(bookmark.pageOrLocation + 1)"
+        case .audiobook:
+            let mins = bookmark.pageOrLocation / 60
+            let secs = bookmark.pageOrLocation % 60
+            return String(format: "%d:%02d", mins, secs)
         case .text:
             return "Position \(bookmark.pageOrLocation)%"
         }
@@ -165,25 +266,43 @@ struct BookmarksList: View {
 
 private struct LoreRowView: View {
     let entity: TypeSafeService.CharacterLoreEntity
+    var onSelect: (() -> Void)? = nil
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(entity.name)
-                    .font(.headline)
-                    .foregroundColor(.primary)
-                Spacer()
-                Text("\(entity.mentionCount) mentions")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+        Button(action: { onSelect?() }) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text(entity.name)
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    Spacer()
+                    Text("\(entity.mentionCount) mentions")
+                        .font(.caption2.bold())
+                        .foregroundColor(DS.Colors.accent)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule().fill(DS.Colors.accent.opacity(0.12))
+                        )
+                }
+                
+                HStack(alignment: .top, spacing: 6) {
+                    Text(entity.role)
+                        .font(.caption.bold())
+                        .foregroundColor(DS.Colors.accent)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(DS.Colors.accent.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                    
+                    Text(entity.preview)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                }
             }
-            Text(entity.role)
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-            Text(entity.preview)
-                .font(.caption)
-                .foregroundColor(.secondary)
+            .padding(.vertical, 4)
         }
-        .padding(.vertical, 4)
+        .buttonStyle(.plain)
     }
 }

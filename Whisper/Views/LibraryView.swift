@@ -103,6 +103,7 @@ struct LibraryView: View {
               }
             }
             .help(cloudSync.statusText)
+            .accessibilityLabel("Cloud sync: \(cloudSync.statusText)")
 
             Menu {
               Button(action: resetToSampleLibrary) {
@@ -111,6 +112,7 @@ struct LibraryView: View {
             } label: {
               Image(systemName: "arrow.clockwise")
             }
+            .accessibilityLabel("Sample Library Options")
 
             Menu {
               Button(action: { isImporting = true }) {
@@ -123,6 +125,7 @@ struct LibraryView: View {
             } label: {
               Image(systemName: "plus")
             }
+            .accessibilityLabel("Add or Import Book")
             .disabled(isProcessingImport)
           }
         }
@@ -193,6 +196,8 @@ struct LibraryView: View {
               )
           }
           .buttonStyle(.plain)
+          .accessibilityLabel("Category filter: \(category)")
+          .accessibilityAddTraits(isSelected ? .isSelected : [])
           .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.12)) {
               hoveredCategory = hovering ? category : nil

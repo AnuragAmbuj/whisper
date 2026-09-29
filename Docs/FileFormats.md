@@ -73,6 +73,26 @@ Documents/Books/{UUID}/
 
 **Parser**: `ComicParser.swift` (with fallback handling)
 
+
+### Audiobook (.m4b, .mp3, .m4a, .aac)
+
+**Features**:
+- Native `AVFoundation` streaming playback (`AVPlayer`, `AVURLAsset`)
+- Variable playback rates: 0.75x, 1x, 1.25x, 1.5x, 1.75x, 2.0x
+- Sleep timer presets: 5, 15, 30, 45, 60 minutes
+- Skip forward 30s / rewind 15s quick scrubbing
+- Lock Screen & Control Center integration via `MPNowPlayingInfoCenter` and remote commands
+- Chapter cues & chapter navigation drawer
+- Time-based bookmarks (`MM:SS` or `H:MM:SS`) with custom notes
+- Embedded artwork and ID3 / MP4 metadata extraction during import
+- Liquid Glass ambient audio player UI with reactive waveform animation
+
+**Player**: `AudiobookPlayerService.swift` / `AudiobookPlayerView.swift`
+
+**Parser**: `ImportService.swift` (`importAudiobookSync` using `AVURLAsset`)
+
+**Storage**: Original audio file stored in `Documents/Books/{UUID}/`
+
 ### TXT (Plain Text)
 
 **Features**:

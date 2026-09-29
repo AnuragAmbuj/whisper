@@ -254,6 +254,22 @@ struct ContentView: View {
         return Color.clear
     }
 
+    private func tabKeyEquivalent(for tab: Tab) -> KeyEquivalent {
+        switch tab {
+        case .library: return "1"
+        case .store: return "2"
+        case .import: return "3"
+        }
+    }
+
+    private func tabKeyString(for tab: Tab) -> String {
+        switch tab {
+        case .library: return "1"
+        case .store: return "2"
+        case .import: return "3"
+        }
+    }
+
     private var macOSNavigationBar: some View {
         HStack(spacing: DS.Spacing.md) {
             Text("Whisper")
@@ -282,6 +298,10 @@ struct ContentView: View {
                         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous))
                     }
                     .buttonStyle(.plain)
+                    .keyboardShortcut(tabKeyEquivalent(for: tab), modifiers: .command)
+                    .help("\(tab.title) (⌘\(tabKeyString(for: tab)))")
+                    .accessibilityLabel("\(tab.title) tab")
+                    .accessibilityAddTraits(selectedTab == tab ? .isSelected : [])
                     .onHover { isHovered in
                         hoveredTab = isHovered ? tab : nil
                     }

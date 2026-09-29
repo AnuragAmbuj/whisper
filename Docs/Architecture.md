@@ -110,3 +110,10 @@ Key platform differences:
 - **PDF thumbnails**: Different APIs for generating thumbnails
 - **Tab views**: iOS uses `.page` style, macOS uses custom pager
 - **Navigation bars**: Different appearance APIs
+
+---
+
+## Ecosystem & Companion Specifications
+
+- **[Whisper Android Product Spec](file:///Users/anuragambuj/Developer/Whisper/Docs/Whisper_Android_Product_Spec.md)**: Architecture, Jetpack Compose UI, Room persistence, and parity specification for the Android version.
+- **[Whisper Plus Backend Architecture & RESTful API Spec](file:///Users/anuragambuj/Developer/Whisper/Docs/Whisper_Plus_Backend_Architecture_Spec.md)**: Full design document, Go & Java/Spring Boot blueprints, Cloudflare Edge deployment (R2, Hyperdrive, D1/KV, Queues, Tunnel), PostgreSQL DDL, and RFC 7807 RESTful API specification.

@@ -166,6 +166,7 @@ struct ComicReaderView: View {
                         .font(.headline)
                         .foregroundColor(currentPage > 0 ? .white : .white.opacity(0.3))
                 }
+                .accessibilityLabel("Previous page")
                 .disabled(currentPage <= 0)
                 .buttonStyle(.plain)
                 
@@ -178,6 +179,8 @@ struct ComicReaderView: View {
                     in: 0...Double(max(0, effectiveTotalPages - 1)),
                     step: 1
                 )
+                .accessibilityLabel("Page scrubber")
+                .accessibilityValue("Page \(currentPage + 1) of \(effectiveTotalPages)")
                 .tint(.white)
                 
                 Button(action: {
@@ -187,6 +190,7 @@ struct ComicReaderView: View {
                         .font(.headline)
                         .foregroundColor(currentPage < effectiveTotalPages - 1 ? .white : .white.opacity(0.3))
                 }
+                .accessibilityLabel("Next page")
                 .disabled(currentPage >= effectiveTotalPages - 1)
                 .buttonStyle(.plain)
             }
@@ -218,6 +222,7 @@ struct ComicReaderView: View {
                         .foregroundColor(enableFocalHighlight ? Color.black : .white.opacity(0.85))
                         .clipShape(Capsule())
                     }
+                    .accessibilityLabel(enableFocalHighlight ? "Disable Focal Zoom" : "Enable Focal Zoom")
                     .buttonStyle(.plain)
                 }
                 
@@ -238,6 +243,7 @@ struct ComicReaderView: View {
                     .foregroundColor(.white)
                     .clipShape(Capsule())
                 }
+                .accessibilityLabel(readingMode == .paged ? "Switch to Continuous Webtoon Mode" : "Switch to Paged Reading Mode")
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, DS.Spacing.md)
@@ -486,7 +492,7 @@ struct ComicPageItemView: View {
     }
 }
 
-// MARK: - Comic Page View (Robust image loader with caching)
+// MARK: - Comic Page View (Robust image loader with cooperative caching)
 
 struct ComicPageView: View {
     let url: URL
@@ -556,54 +562,48 @@ struct ComicPageView: View {
             }
             #endif
         }
-        .onAppear {
-            loadImage(for: url)
-        }
-        .onChange(of: url) { _, newURL in
-            loadImage(for: newURL)
+        .task(id: url) {
+            await loadImage(for: url)
         }
     }
     
-    private func loadImage(for fileURL: URL) {
+    private func loadImage(for fileURL: URL) async {
         isLoading = true
         
-        Task {
-            // 1. Check in-memory ImageCache
-            if let cached = await ImageCache.shared.image(for: fileURL.path) {
-                await MainActor.run {
-                    self.image = cached
-                    self.isLoading = false
-                }
-                return
-            }
-            
-            // 2. Asynchronously load from disk
-            let loaded: PlatformImage? = await Task.detached(priority: .userInitiated) { () -> PlatformImage? in
-                guard let data = try? Data(contentsOf: fileURL) else {
-                    #if canImport(UIKit)
-                    return UIImage(contentsOfFile: fileURL.path)
-                    #elseif canImport(AppKit)
-                    return NSImage(contentsOfFile: fileURL.path)
-                    #endif
-                }
+        // 1. Check in-memory ImageCache
+        if let cached = await ImageCache.shared.image(for: fileURL.path) {
+            guard !Task.isCancelled else { return }
+            self.image = cached
+            self.isLoading = false
+            return
+        }
+        
+        // 2. Asynchronously load from disk with cooperative cancellation
+        let loaded: PlatformImage? = await Task.detached(priority: .userInitiated) { () -> PlatformImage? in
+            guard !Task.isCancelled else { return nil }
+            guard let data = try? Data(contentsOf: fileURL) else {
                 #if canImport(UIKit)
-                return UIImage(data: data)
+                return UIImage(contentsOfFile: fileURL.path)
                 #elseif canImport(AppKit)
-                return NSImage(data: data)
+                return NSImage(contentsOfFile: fileURL.path)
                 #endif
-            }.value
-            
-            if let result = loaded {
-                await ImageCache.shared.setImage(result, for: fileURL.path)
-                await MainActor.run {
-                    self.image = result
-                    self.isLoading = false
-                }
-            } else {
-                await MainActor.run {
-                    self.isLoading = false
-                }
             }
+            guard !Task.isCancelled else { return nil }
+            #if canImport(UIKit)
+            return UIImage(data: data)
+            #elseif canImport(AppKit)
+            return NSImage(data: data)
+            #endif
+        }.value
+        
+        guard !Task.isCancelled else { return }
+        if let result = loaded {
+            await ImageCache.shared.setImage(result, for: fileURL.path)
+            guard !Task.isCancelled else { return }
+            self.image = result
+            self.isLoading = false
+        } else {
+            self.isLoading = false
         }
     }
 }
@@ -677,6 +677,7 @@ struct ComicPagerView: View {
                                 Circle().stroke(DS.Colors.border, lineWidth: 0.5)
                             )
                     }
+                    .accessibilityLabel("Previous page")
                     .buttonStyle(.plain)
                     .disabled(currentPage <= 0)
                     .opacity(currentPage <= 0 ? 0.2 : 0.85)
@@ -695,6 +696,7 @@ struct ComicPagerView: View {
                                 Circle().stroke(DS.Colors.border, lineWidth: 0.5)
                             )
                     }
+                    .accessibilityLabel("Next page")
                     .buttonStyle(.plain)
                     .disabled(currentPage >= pages.count - 1)
                     .opacity(currentPage >= pages.count - 1 ? 0.2 : 0.85)

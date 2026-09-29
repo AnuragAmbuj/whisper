@@ -22,8 +22,18 @@ actor ImageCache {
     private var loadingTasks: [String: Task<PlatformImage?, Never>] = [:]
     
     private init() {
-        cache.countLimit = 50
-        cache.totalCostLimit = 50 * 1024 * 1024
+        cache.countLimit = 60
+        cache.totalCostLimit = 64 * 1024 * 1024 // 64 MB
+    }
+    
+    private func approximateCost(for image: PlatformImage) -> Int {
+        #if canImport(UIKit)
+        let pixels = image.size.width * image.scale * image.size.height * image.scale
+        return max(Int(pixels * 4), 1024)
+        #elseif canImport(AppKit)
+        let pixels = image.size.width * image.size.height
+        return max(Int(pixels * 4), 1024)
+        #endif
     }
     
     func image(for key: String) -> PlatformImage? {
@@ -31,7 +41,8 @@ actor ImageCache {
     }
     
     func setImage(_ image: PlatformImage, for key: String) {
-        cache.setObject(image, forKey: key as NSString)
+        let cost = approximateCost(for: image)
+        cache.setObject(image, forKey: key as NSString, cost: cost)
     }
     
     func loadImage(named name: String, from documentsDir: URL) async -> PlatformImage? {
@@ -51,12 +62,14 @@ actor ImageCache {
             if let data = try? Data(contentsOf: imageURL) {
                 #if canImport(UIKit)
                 if let image = UIImage(data: data) {
-                    cache.setObject(image, forKey: name as NSString)
+                    let cost = max(data.count, Int(image.size.width * image.scale * image.size.height * image.scale * 4))
+                    cache.setObject(image, forKey: name as NSString, cost: cost)
                     return image
                 }
                 #elseif canImport(AppKit)
                 if let image = NSImage(data: data) {
-                    cache.setObject(image, forKey: name as NSString)
+                    let cost = max(data.count, Int(image.size.width * image.size.height * 4))
+                    cache.setObject(image, forKey: name as NSString, cost: cost)
                     return image
                 }
                 #endif
@@ -65,12 +78,14 @@ actor ImageCache {
             // 2. Try asset bundle
             #if canImport(UIKit)
             if let assetImage = UIImage(named: name) {
-                cache.setObject(assetImage, forKey: name as NSString)
+                let cost = Int(assetImage.size.width * assetImage.scale * assetImage.size.height * assetImage.scale * 4)
+                cache.setObject(assetImage, forKey: name as NSString, cost: max(cost, 1024))
                 return assetImage
             }
             #elseif canImport(AppKit)
             if let assetImage = NSImage(named: NSImage.Name(name)) {
-                cache.setObject(assetImage, forKey: name as NSString)
+                let cost = Int(assetImage.size.width * assetImage.size.height * 4)
+                cache.setObject(assetImage, forKey: name as NSString, cost: max(cost, 1024))
                 return assetImage
             }
             #endif
@@ -81,12 +96,14 @@ actor ImageCache {
                 if let data = try? Data(contentsOf: fileURL) {
                     #if canImport(UIKit)
                     if let image = UIImage(data: data) {
-                        cache.setObject(image, forKey: name as NSString)
+                        let cost = max(data.count, Int(image.size.width * image.scale * image.size.height * image.scale * 4))
+                        cache.setObject(image, forKey: name as NSString, cost: cost)
                         return image
                     }
                     #elseif canImport(AppKit)
                     if let image = NSImage(data: data) {
-                        cache.setObject(image, forKey: name as NSString)
+                        let cost = max(data.count, Int(image.size.width * image.size.height * 4))
+                        cache.setObject(image, forKey: name as NSString, cost: cost)
                         return image
                     }
                     #endif

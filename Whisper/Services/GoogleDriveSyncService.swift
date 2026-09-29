@@ -431,6 +431,9 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
         case "cbr": return "application/vnd.comicbook-rar"
         case "txt": return "text/plain"
         case "md": return "text/markdown"
+        case "m4b", "m4a": return "audio/mp4"
+        case "mp3": return "audio/mpeg"
+        case "aac": return "audio/aac"
         default: return "application/octet-stream"
         }
     }
@@ -671,7 +674,7 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
               let files = json["files"] as? [[String: Any]] else { return }
         
         let existingFilenames = Set(existingBooks.compactMap { $0.url?.lastPathComponent.lowercased() })
-        let supportedExtensions = Set(["epub", "pdf", "cbz", "cbr", "txt", "md"])
+        let supportedExtensions = CloudSyncService.supportedSyncExtensions
         
         for file in files {
             guard let name = file["name"] as? String,
@@ -687,7 +690,7 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
                 guard let downURL = URL(string: "\(driveFilesURLString)/\(id)?alt=media") else { continue }
                 var downReq = URLRequest(url: downURL)
                 downReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-                downReq.timeoutInterval = 120
+                downReq.timeoutInterval = 300
                 
                 if let (fileContent, downResp) = try? await URLSession.shared.data(for: downReq),
                    let downHTTP = downResp as? HTTPURLResponse, (200...299).contains(downHTTP.statusCode) {
@@ -763,7 +766,7 @@ final class GoogleDriveSyncService: NSObject, ObservableObject, ASWebAuthenticat
         let accessing = folderURL.startAccessingSecurityScopedResource()
         defer { if accessing { folderURL.stopAccessingSecurityScopedResource() } }
         
-        let supportedExtensions = Set(["epub", "pdf", "cbz", "cbr", "txt", "md"])
+        let supportedExtensions = CloudSyncService.supportedSyncExtensions
         guard let enumerator = FileManager.default.enumerator(
             at: folderURL,
             includingPropertiesForKeys: [.isRegularFileKey],

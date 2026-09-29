@@ -936,6 +936,8 @@ struct EpubReaderView: View {
   let fontSize: Double
   var bookTitle: String = ""
   @Binding var showControls: Bool
+  @Binding var targetChapterIndex: Int?
+  @Binding var targetSearchSnippet: String?
   var onProgressChanged: ((Double) -> Void)? = nil
 
   @StateObject private var controller: EpubReaderController
@@ -949,6 +951,8 @@ struct EpubReaderView: View {
     fontSize: Double = 19.0,
     bookTitle: String = "",
     showControls: Binding<Bool> = .constant(true),
+    targetChapterIndex: Binding<Int?> = .constant(nil),
+    targetSearchSnippet: Binding<String?> = .constant(nil),
     onProgressChanged: ((Double) -> Void)? = nil
   ) {
     self.bookDir = bookDir
@@ -956,6 +960,8 @@ struct EpubReaderView: View {
     self.fontSize = fontSize
     self.bookTitle = bookTitle
     self._showControls = showControls
+    self._targetChapterIndex = targetChapterIndex
+    self._targetSearchSnippet = targetSearchSnippet
     self.onProgressChanged = onProgressChanged
     _controller = StateObject(wrappedValue: EpubReaderController(bookDir: bookDir, initialMode: .scroll))
   }
@@ -1142,6 +1148,80 @@ struct EpubReaderView: View {
     }
     .onChange(of: fontSize) { _, newSize in
       controller.updateThemeAndFont(theme: theme, fontSize: newSize)
+    }
+    .onChange(of: targetChapterIndex) { _, newIndex in
+      guard let idx = newIndex else { return }
+      currentChapterIndex = idx
+      controller.scrollToChapter(index: idx)
+      DispatchQueue.main.async {
+        self.targetChapterIndex = nil
+      }
+    }
+    .onChange(of: targetSearchSnippet) { _, snippet in
+      guard let snippet = snippet, !snippet.isEmpty else { return }
+      navigateToSnippet(snippet)
+      DispatchQueue.main.async {
+        self.targetSearchSnippet = nil
+      }
+    }
+  }
+
+  private func navigateToSnippet(_ snippet: String) {
+    let clean = snippet.trimmingCharacters(in: .whitespacesAndNewlines)
+    let searchSample = String(clean.prefix(40))
+
+    var matchedChapterIndex: Int? = nil
+    for (idx, path) in chapterPaths.enumerated() {
+      let chapterURL = bookDir.appendingPathComponent(path)
+      if let content = try? String(contentsOf: chapterURL),
+         (content.localizedCaseInsensitiveContains(clean) || content.localizedCaseInsensitiveContains(searchSample)) {
+        matchedChapterIndex = idx
+        break
+      }
+    }
+
+    if let idx = matchedChapterIndex {
+      currentChapterIndex = idx
+      controller.scrollToChapter(index: idx)
+    }
+
+    guard let webView = controller.webView else { return }
+    let escapedSnippet = searchSample
+      .replacingOccurrences(of: "\\", with: "\\\\")
+      .replacingOccurrences(of: "\"", with: "\\\"")
+      .replacingOccurrences(of: "\n", with: " ")
+
+    let js = """
+    (function() {
+      var term = "\(escapedSnippet)";
+      if (!term || term.length < 3) return;
+      if (window.find && window.find(term, false, false, true, false, false, false)) {
+        var sel = window.getSelection();
+        if (sel && sel.anchorNode && sel.anchorNode.parentElement) {
+          sel.anchorNode.parentElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        return;
+      }
+      var nodes = document.querySelectorAll('p, div, h1, h2, h3, h4, span, li, section');
+      for (var i = 0; i < nodes.length; i++) {
+        var node = nodes[i];
+        if (node.textContent && node.textContent.toLowerCase().indexOf(term.toLowerCase()) !== -1) {
+          node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          var origBg = node.style.backgroundColor;
+          node.style.transition = 'background-color 0.4s ease';
+          node.style.backgroundColor = 'rgba(255, 215, 0, 0.35)';
+          node.style.borderRadius = '4px';
+          setTimeout(function() {
+            node.style.backgroundColor = origBg;
+          }, 2500);
+          break;
+        }
+      }
+    })();
+    """
+
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+      webView.evaluateJavaScript(js, completionHandler: nil)
     }
   }
 

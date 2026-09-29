@@ -65,9 +65,21 @@ class ReaderViewModel {
         UserDefaults.standard.set(fontName, forKey: keyFontName)
     }
     
-    func updateProgress(_ newProgress: Double) {
+    private var lastCloudSyncTimestamp: Date = .distantPast
+    
+    func updateProgress(_ newProgress: Double, immediateCloudSync: Bool = false) {
         book.progress = min(max(newProgress, 0.0), 1.0)
         book.lastReadDate = Date()
+        
+        let now = Date()
+        if immediateCloudSync || now.timeIntervalSince(lastCloudSyncTimestamp) >= 10.0 {
+            lastCloudSyncTimestamp = now
+            CloudSyncService.shared.saveReadingProgress(for: book)
+        }
+    }
+    
+    func flushReadingProgressToCloud() {
+        lastCloudSyncTimestamp = Date()
         CloudSyncService.shared.saveReadingProgress(for: book)
     }
     
@@ -143,6 +155,10 @@ class ReaderViewModel {
                 noteText = "Page \(currentLocation + 1)"
             case .epub:
                 noteText = "Chapter \(currentLocation + 1)"
+            case .audiobook:
+                let mins = currentLocation / 60
+                let secs = currentLocation % 60
+                noteText = String(format: "%d:%02d", mins, secs)
             case .text:
                 noteText = "\(currentLocation)% completed"
             }

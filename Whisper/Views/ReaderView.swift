@@ -5,33 +5,32 @@
 //  Created by Anurag Ambuj on 29/12/25.
 //
 
-import PDFKit
 import SwiftData
 import SwiftUI
 
 struct ReaderView: View {
-  @Environment(\.dismiss) private var dismiss
-  @Environment(\.modelContext) private var modelContext
-  @State var viewModel: ReaderViewModel
-  @State private var showControls = true
+  @Bindable var viewModel: ReaderViewModel
   @State private var showSettings = false
   @State private var showBookmarks = false
-  @State private var pageIndex: Int = 0
-  @State private var totalPages: Int = 1
   @State private var showSmartFind = false
   @State private var showAIInsights = false
-
-  init(book: Book) {
-    _viewModel = State(wrappedValue: ReaderViewModel(book: book))
-  }
-
-  init(viewModel: ReaderViewModel) {
-    _viewModel = State(wrappedValue: viewModel)
-  }
+  @State private var showControls = true
+  @State private var pageIndex: Int = 0
+  @State private var totalPages: Int = 0
+  @State private var targetChapterIndex: Int? = nil
+  @State private var targetSearchSnippet: String? = nil
+  @State private var targetTextLocation: Int? = nil
+  @State private var currentChapterPath: String? = nil
+  @Environment(\.dismiss) private var dismiss
+  @Environment(\.modelContext) private var modelContext
 
   var body: some View {
     ZStack {
-      // Content layer based on format
+      // Dynamic Eye Comfort Theme Background
+      viewModel.theme.backgroundColor
+        .ignoresSafeArea()
+
+      // Format-Specific Reader View
       switch viewModel.book.format ?? .text {
       case .text:
         TextReaderView(
@@ -39,48 +38,50 @@ struct ReaderView: View {
           theme: viewModel.theme,
           fontSize: viewModel.fontSize,
           lineHeight: viewModel.lineHeight,
+          targetLocation: $targetTextLocation,
+          targetSearchSnippet: $targetSearchSnippet,
           showControls: $showControls
         )
 
-      case .pdf:
-        if let url = viewModel.book.resolvedURL {
-          ZStack {
-            PDFKitView(url: url, currentPageIndex: $pageIndex, totalPages: $totalPages, theme: viewModel.theme)
+      case .comic:
+        if let bookDir = viewModel.book.bookDir {
+          ComicReaderView(
+            bookDir: bookDir,
+            currentPage: $pageIndex,
+            totalPages: $totalPages,
+            showControls: $showControls
+          )
+          .onChange(of: pageIndex) { _, newIndex in
+            viewModel.updateLocation(newIndex)
+            let prog = totalPages > 1 ? Double(newIndex) / Double(totalPages - 1) : 1.0
+            viewModel.updateProgress(prog)
           }
-          .onAppear {
-            pageIndex = viewModel.currentLocation
+        } else {
+          ContentUnavailableView("Comic Not Found", systemImage: "photo.stack")
+        }
+
+      case .pdf:
+        if let pdfURL = viewModel.book.resolvedURL {
+          PDFKitView(
+            url: pdfURL,
+            currentPageIndex: $pageIndex,
+            totalPages: $totalPages,
+            theme: viewModel.theme,
+            targetSearchSnippet: $targetSearchSnippet
+          )
+          .ignoresSafeArea()
+          .onTapGesture {
+            withAnimation(.easeInOut(duration: DS.Animation.fast)) {
+              showControls.toggle()
+            }
           }
           .onChange(of: pageIndex) { _, newValue in
             viewModel.updateLocation(newValue)
             let prog = totalPages > 1 ? Double(newValue) / Double(totalPages - 1) : 1.0
             viewModel.updateProgress(prog)
           }
-          .simultaneousGesture(
-            TapGesture().onEnded {
-              withAnimation(.easeInOut(duration: 0.22)) {
-                showControls.toggle()
-              }
-            }
-          )
         } else {
           ContentUnavailableView("PDF Not Found", systemImage: "doc.text")
-        }
-
-      case .comic:
-        ComicReaderView(
-          bookDir: viewModel.book.bookDir,
-          mockImages: viewModel.book.sampleImages,
-          currentPage: $pageIndex,
-          totalPages: $totalPages,
-          showControls: $showControls
-        )
-        .onAppear {
-          pageIndex = viewModel.currentLocation
-        }
-        .onChange(of: pageIndex) { _, newValue in
-          viewModel.updateLocation(newValue)
-          let prog = totalPages > 1 ? Double(newValue) / Double(totalPages - 1) : 1.0
-          viewModel.updateProgress(prog)
         }
 
       case .epub:
@@ -91,6 +92,8 @@ struct ReaderView: View {
             fontSize: viewModel.fontSize,
             bookTitle: viewModel.book.title,
             showControls: $showControls,
+            targetChapterIndex: $targetChapterIndex,
+            targetSearchSnippet: $targetSearchSnippet,
             onProgressChanged: { progress in
               viewModel.updateProgress(progress)
             }
@@ -98,11 +101,18 @@ struct ReaderView: View {
         } else {
           ContentUnavailableView("EPUB Not Found", systemImage: "book.closed")
         }
+
+      case .audiobook:
+        AudiobookPlayerView(
+          book: viewModel.book,
+          viewModel: viewModel,
+          showControls: $showControls
+        )
       }
 
       // Top Navigation HUD (iOS)
       #if os(iOS)
-      if showControls {
+      if showControls && (viewModel.book.format ?? .text) != .audiobook {
         VStack(spacing: 0) {
           HStack(alignment: .center) {
             // Dismiss / Close Button
@@ -117,8 +127,11 @@ struct ReaderView: View {
                   Circle()
                     .stroke(viewModel.theme.textColor.opacity(0.12), lineWidth: 1)
                 )
+                .frame(minWidth: 44, minHeight: 44)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Close Reader")
+            .accessibilityHint("Return to library")
 
             Spacer()
 
@@ -137,10 +150,11 @@ struct ReaderView: View {
               }
             }
             .frame(maxWidth: 240)
+            .accessibilityElement(children: .combine)
 
             Spacer()
 
-            // Trailing Actions
+            // Action Buttons
             HStack(spacing: DS.Spacing.sm) {
               Button(action: { showAIInsights = true }) {
                 Image(systemName: "sparkles")
@@ -153,9 +167,10 @@ struct ReaderView: View {
                     Circle()
                       .stroke(viewModel.theme.textColor.opacity(0.12), lineWidth: 1)
                   )
+                  .frame(minWidth: 44, minHeight: 44)
               }
               .buttonStyle(.plain)
-              .help("Apple Intelligence Reading Insights")
+              .accessibilityLabel("Apple Intelligence Insights")
 
               Button(action: { showSmartFind = true }) {
                 Image(systemName: "sparkle.magnifyingglass")
@@ -168,8 +183,10 @@ struct ReaderView: View {
                     Circle()
                       .stroke(viewModel.theme.textColor.opacity(0.12), lineWidth: 1)
                   )
+                  .frame(minWidth: 44, minHeight: 44)
               }
               .buttonStyle(.plain)
+              .accessibilityLabel("Smart Find")
 
               Button(action: { showBookmarks = true }) {
                 Image(systemName: "list.bullet")
@@ -182,13 +199,15 @@ struct ReaderView: View {
                     Circle()
                       .stroke(viewModel.theme.textColor.opacity(0.12), lineWidth: 1)
                   )
+                  .frame(minWidth: 44, minHeight: 44)
               }
               .buttonStyle(.plain)
+              .accessibilityLabel("Chapters and Bookmarks")
 
               Button(action: { viewModel.toggleBookmark() }) {
                 Image(systemName: viewModel.isBookmarked ? "bookmark.fill" : "bookmark")
                   .font(.system(size: 14, weight: .semibold))
-                  .foregroundColor(viewModel.isBookmarked ? .yellow : viewModel.theme.textColor)
+                  .foregroundColor(viewModel.isBookmarked ? DS.Colors.accent : viewModel.theme.textColor)
                   .frame(width: 38, height: 38)
                   .background(.ultraThinMaterial)
                   .clipShape(Circle())
@@ -196,8 +215,10 @@ struct ReaderView: View {
                     Circle()
                       .stroke(viewModel.theme.textColor.opacity(0.12), lineWidth: 1)
                   )
+                  .frame(minWidth: 44, minHeight: 44)
               }
               .buttonStyle(.plain)
+              .accessibilityLabel(viewModel.isBookmarked ? "Remove Bookmark" : "Add Bookmark")
 
               Button(action: {
                 withAnimation(.easeInOut(duration: DS.Animation.normal)) { showSettings.toggle() }
@@ -212,8 +233,10 @@ struct ReaderView: View {
                     Circle()
                       .stroke(viewModel.theme.textColor.opacity(0.12), lineWidth: 1)
                   )
+                  .frame(minWidth: 44, minHeight: 44)
               }
               .buttonStyle(.plain)
+              .accessibilityLabel("Reading Appearance and Display Settings")
             }
           }
           .padding(.horizontal, DS.Spacing.lg)
@@ -263,39 +286,70 @@ struct ReaderView: View {
             Button(action: { dismiss() }) {
               Image(systemName: "xmark.circle")
             }
+            .accessibilityLabel("Close Reader")
+            .keyboardShortcut(.escape, modifiers: [])
+            .help("Close Reader (Esc)")
+
             Divider()
+
             Button(action: { showAIInsights = true }) {
               Image(systemName: "sparkles")
             }
-            .help("Apple Intelligence Reading Insights")
+            .accessibilityLabel("Apple Intelligence Reading Insights")
+            .keyboardShortcut("i", modifiers: .command)
+            .help("Apple Intelligence Reading Insights (⌘I)")
 
             Button(action: { showSmartFind = true }) {
               Image(systemName: "sparkle.magnifyingglass")
             }
-            .help("Smart Find (TypeSafe AI)")
+            .accessibilityLabel("Smart Find")
+            .keyboardShortcut("f", modifiers: .command)
+            .help("Smart Find (⌘F)")
 
             Button(action: { showBookmarks = true }) {
               Image(systemName: "list.bullet")
             }
+            .accessibilityLabel("Chapters and Bookmarks")
+            .keyboardShortcut("b", modifiers: [.command, .shift])
+            .help("Chapters and Bookmarks (⇧⌘B)")
+
             Button(action: { viewModel.toggleBookmark() }) {
               Image(systemName: viewModel.isBookmarked ? "bookmark.fill" : "bookmark")
                 .foregroundColor(viewModel.isBookmarked ? .yellow : .white)
             }
-            Button(action: {
-              withAnimation(.easeInOut(duration: DS.Animation.normal)) { showSettings.toggle() }
-            }) {
-              Image(systemName: "textformat.size")
+            .accessibilityLabel(viewModel.isBookmarked ? "Remove Bookmark" : "Add Bookmark")
+            .keyboardShortcut("d", modifiers: .command)
+            .help(viewModel.isBookmarked ? "Remove Bookmark (⌘D)" : "Bookmark Page (⌘D)")
+
+            if (viewModel.book.format ?? .text) != .audiobook {
+              Button(action: {
+                withAnimation(.easeInOut(duration: DS.Animation.normal)) { showSettings.toggle() }
+              }) {
+                Image(systemName: "textformat.size")
+              }
+              .accessibilityLabel("Reading Appearance and Display Settings")
+              .keyboardShortcut(",", modifiers: .command)
+              .help("Reading Settings (⌘,)")
             }
           }
         }
       }
     #endif
-
     .sheet(isPresented: $showBookmarks) {
-      BookmarksList(book: viewModel.book) { bookmark in
-        pageIndex = bookmark.pageOrLocation
-        viewModel.updateLocation(bookmark.pageOrLocation)
-      }
+      BookmarksList(
+        book: viewModel.book,
+        currentChapterPath: currentChapterPath,
+        currentLocation: (viewModel.book.format ?? .text) == .epub ? (targetChapterIndex ?? 0) : pageIndex,
+        onSelectChapter: { chapter in
+          handleChapterNavigation(chapter)
+        },
+        onSelectBookmark: { bookmark in
+          handleBookmarkNavigation(bookmark)
+        },
+        onFindCharacter: { characterName in
+          showSmartFind = true
+        }
+      )
     }
     .sheet(isPresented: $showSmartFind) {
       SmartFindSheet(book: viewModel.book, theme: viewModel.theme) { lineIndex, excerpt in
@@ -309,11 +363,50 @@ struct ReaderView: View {
       viewModel.toggleBookmark()
     }
     .onDisappear {
+      if viewModel.book.format == .audiobook {
+        AudiobookPlayerService.shared.pause()
+      }
       try? modelContext.save()
     }
   }
 
+  private func handleChapterNavigation(_ chapter: Chapter) {
+    let loc = chapter.pageOrLocation
+    currentChapterPath = chapter.path
+    viewModel.updateLocation(loc)
+
+    switch viewModel.book.format ?? .text {
+    case .epub:
+      targetChapterIndex = loc
+    case .pdf, .comic:
+      pageIndex = loc
+    case .text:
+      targetTextLocation = loc
+      pageIndex = loc
+    case .audiobook:
+      AudiobookPlayerService.shared.seek(to: Double(loc))
+    }
+  }
+
+  private func handleBookmarkNavigation(_ bookmark: Bookmark) {
+    pageIndex = bookmark.pageOrLocation
+    viewModel.updateLocation(bookmark.pageOrLocation)
+
+    switch viewModel.book.format ?? .text {
+    case .epub:
+      targetChapterIndex = bookmark.pageOrLocation
+    case .pdf, .comic:
+      pageIndex = bookmark.pageOrLocation
+    case .text:
+      targetTextLocation = bookmark.pageOrLocation
+    case .audiobook:
+      AudiobookPlayerService.shared.seek(to: Double(bookmark.pageOrLocation))
+    }
+  }
+
   private func handleSmartFindNavigation(lineIndex: Int, excerpt: String) {
+    targetSearchSnippet = excerpt
+
     // 1. Check if excerpt indicates a specific page (PDF / Comic format)
     let pattern = #"(?:\[Page|Page)\s+(\d+)"#
     if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
@@ -326,16 +419,32 @@ struct ReaderView: View {
       return
     }
 
-    // 2. Default line or location navigation
+    // 2. Check if audiobook timestamp (e.g. 03:45 or 12:30)
+    if viewModel.book.format == .audiobook {
+      let timePattern = #"(\d{1,2}):(\d{2})(?::(\d{2}))?"#
+      if let regex = try? NSRegularExpression(pattern: timePattern, options: []),
+         let match = regex.firstMatch(in: excerpt, range: NSRange(excerpt.startIndex..., in: excerpt)),
+         let r1 = Range(match.range(at: 1), in: excerpt),
+         let r2 = Range(match.range(at: 2), in: excerpt),
+         let m = Int(excerpt[r1]),
+         let s = Int(excerpt[r2]) {
+        let total = Double(m * 60 + s)
+        AudiobookPlayerService.shared.seek(to: total)
+        viewModel.updateLocation(Int(total))
+        return
+      }
+    }
+
+    // 3. For Text Reader:
+    if viewModel.book.format == .text {
+      targetTextLocation = lineIndex
+      pageIndex = lineIndex
+      viewModel.updateLocation(lineIndex)
+      return
+    }
+
+    // 4. Default line or location navigation
     pageIndex = lineIndex
     viewModel.updateLocation(lineIndex)
   }
-}
-
-#Preview {
-  let mockBook = Book(
-    title: "1984", author: "George Orwell", coverImageName: "",
-    content: "It was a bright cold day...")
-  let vm = ReaderViewModel(book: mockBook)
-  ReaderView(viewModel: vm)
 }

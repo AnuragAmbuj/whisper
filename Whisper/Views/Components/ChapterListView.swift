@@ -11,15 +11,19 @@ struct Chapter: Identifiable, Codable {
   var id: UUID = UUID()
   let title: String
   let path: String
+  var pageOrLocation: Int = 0
+  var subtitle: String? = nil
 
   enum CodingKeys: String, CodingKey {
-    case id, title, path
+    case id, title, path, pageOrLocation, subtitle
   }
 
-  init(id: UUID = UUID(), title: String, path: String) {
+  init(id: UUID = UUID(), title: String, path: String, pageOrLocation: Int = 0, subtitle: String? = nil) {
     self.id = id
     self.title = title
     self.path = path
+    self.pageOrLocation = pageOrLocation
+    self.subtitle = subtitle
   }
 
   init(from decoder: Decoder) throws {
@@ -27,6 +31,8 @@ struct Chapter: Identifiable, Codable {
     self.id = (try? container.decode(UUID.self, forKey: .id)) ?? UUID()
     self.title = try container.decode(String.self, forKey: .title)
     self.path = try container.decode(String.self, forKey: .path)
+    self.pageOrLocation = (try? container.decode(Int.self, forKey: .pageOrLocation)) ?? 0
+    self.subtitle = try? container.decode(String.self, forKey: .subtitle)
   }
 }
 
@@ -54,9 +60,16 @@ struct ChapterListView: View {
               isPresented = false
             }) {
               HStack {
-                Text(chapter.title)
-                  .font(.body)
-                  .foregroundColor(.primary)
+                VStack(alignment: .leading, spacing: 3) {
+                  Text(chapter.title)
+                    .font(.body)
+                    .foregroundColor(.primary)
+                  if let subtitle = chapter.subtitle {
+                    Text(subtitle)
+                      .font(.caption2)
+                      .foregroundColor(.secondary)
+                  }
+                }
                 Spacer()
                 Image(systemName: "chevron.right")
                   .font(.caption2.weight(.semibold))
@@ -92,7 +105,12 @@ struct ChapterListView: View {
     if let data = try? Data(contentsOf: tocURL),
        let loaded = try? JSONDecoder().decode([Chapter].self, from: data),
        !loaded.isEmpty {
-      self.chapters = loaded
+      self.chapters = loaded.enumerated().map { index, ch in
+        var item = ch
+        if item.pageOrLocation == 0 && index > 0 { item.pageOrLocation = index }
+        if item.subtitle == nil { item.subtitle = "Chapter \(index + 1)" }
+        return item
+      }
       return
     }
 
@@ -103,7 +121,12 @@ struct ChapterListView: View {
         let formattedTitle = filename.replacingOccurrences(of: "_", with: " ")
           .replacingOccurrences(of: "-", with: " ")
           .capitalized
-        return Chapter(title: formattedTitle.isEmpty ? "Chapter \(index + 1)" : formattedTitle, path: path)
+        return Chapter(
+          title: formattedTitle.isEmpty ? "Chapter \(index + 1)" : formattedTitle,
+          path: path,
+          pageOrLocation: index,
+          subtitle: "Chapter \(index + 1)"
+        )
       }
     }
   }

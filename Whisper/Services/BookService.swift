@@ -184,6 +184,10 @@ class BookService {
     let epubBook = createSampleEPUB()
     books.append(epubBook)
 
+    // 6. Audiobook: The Art of War
+    let audiobook = createSampleAudiobook()
+    books.append(audiobook)
+
     return books
   }
 
@@ -290,14 +294,14 @@ class BookService {
           .foregroundColor: UIColor.label,
         ]
         let body1 = """
-          Welcome to Whisper, an immersive reading environment designed with Apple's premium \\
-          Liquid Glass visual hierarchy. Whisper redefines document navigation through tactile, \\
+          Welcome to Whisper, an immersive reading environment designed with Apple's premium \
+          Liquid Glass visual hierarchy. Whisper redefines document navigation through tactile, \
           fluid gestures and adaptive ambient aesthetics.
 
           Key Features:
           • Multi-Format Support: Seamlessly read EPUB, PDF, CBZ/CBR comics, and plain text.
           • Liquid Glass UI: Dynamic background mesh adapts smoothly to your content.
-          • Continuous & Paginated Modes: Switch effortlessly between standard vertical scrolling \\
+          • Continuous & Paginated Modes: Switch effortlessly between standard vertical scrolling \
           and horizontal column pagination.
           • Tactile Gesture Controls: Pinch-to-zoom, swipe-to-turn, and responsive touch controls.
           • Smart Bookmarking: Save your favorite quotes and notes with persistent memory.
@@ -624,5 +628,18 @@ class BookService {
       format: .epub,
       url: epubDir
     )
+  }
+
+  private func createSampleAudiobook() -> Book {
+    let book = Book(
+      title: "The Art of War",
+      author: "Sun Tzu",
+      coverImageName: "",
+      content: "Narrated unabridged audio edition of the military strategy classic by Master Sun Tzu. Laying Plans, Waging War, Attack by Stratagem, Tactical Dispositions, Energy, Weak Points and Strong, Maneuvering, and Variation in Tactics.",
+      progress: 0.15,
+      format: .audiobook
+    )
+    book.addBookmark(Bookmark(pageOrLocation: 180, note: "03:00 • Chapter 1: Laying Plans"))
+    return book
   }
 }

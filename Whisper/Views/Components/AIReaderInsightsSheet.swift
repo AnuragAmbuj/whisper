@@ -209,13 +209,28 @@ struct AIReaderInsightsSheet: View {
             }
             
             if insights.characters.isEmpty {
-                Text("No prominent character entities detected in this segment.")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+                VStack(spacing: DS.Spacing.xs) {
+                    Image(systemName: "doc.text.magnifyingglass")
+                        .font(.system(size: 28))
+                        .foregroundColor(.secondary)
+                        .padding(.top, 4)
+                    
+                    Text("No Character Entities")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.primary)
+                    
+                    Text("This document is instructional, conceptual, or non-fiction. It focuses on architecture, gestures, and features rather than narrative characters.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, DS.Spacing.md)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, DS.Spacing.md)
             } else {
                 VStack(spacing: DS.Spacing.sm) {
                     ForEach(insights.characters) { char in
-                        HStack(spacing: DS.Spacing.md) {
+                        HStack(alignment: .top, spacing: DS.Spacing.md) {
                             ZStack {
                                 Circle()
                                     .fill(DS.Colors.accent.opacity(0.12))
@@ -226,27 +241,36 @@ struct AIReaderInsightsSheet: View {
                                     .foregroundColor(DS.Colors.accent)
                             }
                             
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(char.name)
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundColor(.primary)
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack(spacing: 6) {
+                                    Text(char.name)
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundColor(.primary)
+                                    
+                                    if char.mentionCount > 0 {
+                                        Text("\(char.mentionCount) mentions")
+                                            .font(.system(size: 10, weight: .medium))
+                                            .foregroundColor(.secondary)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(DS.Colors.unselectedFill)
+                                            .clipShape(Capsule())
+                                    }
+                                }
                                 
                                 Text(char.role)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .font(.caption.weight(.medium))
+                                    .foregroundColor(DS.Colors.accent)
+                                
+                                if !char.preview.isEmpty {
+                                    Text(char.preview)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(3)
+                                }
                             }
                             
                             Spacer()
-                            
-                            if char.mentionCount > 0 {
-                                Text("\(char.mentionCount) mentions")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(DS.Colors.unselectedFill)
-                                    .clipShape(Capsule())
-                            }
                         }
                         .padding(.vertical, 4)
                         
@@ -270,10 +294,22 @@ struct AIReaderInsightsSheet: View {
     private func loadInsights() async {
         isLoading = true
         let searchable = book.resolveSearchableContent()
+        let trimmedSearchable = searchable.trimmingCharacters(in: .whitespacesAndNewlines)
         let isPlaceholder = book.content.hasPrefix("EPUB Content") ||
             book.content.hasPrefix("Comic Book -") ||
             book.content.hasPrefix("PDF Document -")
-        let contentToAnalyze = (!isPlaceholder && book.content.count > 100) ? book.content : (searchable.isEmpty ? book.content : searchable)
+        
+        let contentToAnalyze: String
+        if !trimmedSearchable.isEmpty && (isPlaceholder || trimmedSearchable.count > book.content.count) {
+            contentToAnalyze = trimmedSearchable
+        } else if !book.content.isEmpty && !isPlaceholder {
+            contentToAnalyze = book.content
+        } else if !trimmedSearchable.isEmpty {
+            contentToAnalyze = trimmedSearchable
+        } else {
+            contentToAnalyze = "\(book.title) by \(book.author)"
+        }
+        
         let analysis = await AISummarizerService.shared.generateInsights(for: contentToAnalyze, bookTitle: book.title)
         await MainActor.run {
             self.insights = analysis
