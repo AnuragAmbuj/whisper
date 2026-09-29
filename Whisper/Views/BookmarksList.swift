@@ -251,16 +251,17 @@ struct BookmarksList: View {
         case .epub:
             return "Chapter \(bookmark.pageOrLocation + 1)"
         case .audiobook:
-            let mins = bookmark.pageOrLocation / 60
-            let secs = bookmark.pageOrLocation % 60
-            return String(format: "%d:%02d", mins, secs)
+            return AudiobookPlayerService.formatTime(Double(bookmark.pageOrLocation))
         case .text:
             return "Position \(bookmark.pageOrLocation)%"
         }
     }
     
     func deleteBookmark(at offsets: IndexSet) {
-        book.bookmarks?.remove(atOffsets: offsets)
+        let bookmarksToDelete = offsets.map { book.safeBookmarks[$0] }
+        book.bookmarks?.removeAll(where: { bm in
+            bookmarksToDelete.contains(where: { $0.id == bm.id })
+        })
     }
 }
 

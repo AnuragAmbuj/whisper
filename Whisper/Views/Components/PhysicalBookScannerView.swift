@@ -260,6 +260,23 @@ struct PhysicalBookScannerView: View {
             }
             .buttonStyle(.plain)
             #endif
+            
+            #if os(macOS)
+            Button(action: { selectImageOnMac() }) {
+                HStack(spacing: 10) {
+                    Image(systemName: "photo.badge.plus")
+                        .font(.headline)
+                    Text(scannedPageCount > 0 ? "Select More Page Images (\(scannedPageCount) Captured)" : "Select Page Images from Mac...")
+                        .font(.headline.weight(.semibold))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(Color.primary)
+                .foregroundColor(DS.Colors.onSelection)
+                .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            #endif
         }
     }
     
@@ -403,6 +420,59 @@ struct PhysicalBookScannerView: View {
     }
     #endif
     
+
+    #if os(macOS)
+    private func selectImageOnMac() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canCreateDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.image, .jpeg, .png, .tiff]
+        
+        if panel.runModal() == .OK {
+            let urls = panel.urls
+            guard !urls.isEmpty else { return }
+            Task {
+                await processMacImages(urls)
+            }
+        }
+    }
+    
+    private func processMacImages(_ urls: [URL]) async {
+        await MainActor.run {
+            self.isProcessingOCR = true
+        }
+        
+        var fullText = ""
+        var validCount = 0
+        
+        for (i, url) in urls.enumerated() {
+            guard let nsImage = NSImage(contentsOf: url),
+                  let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+                continue
+            }
+            validCount += 1
+            let pageText = await performOCR(on: cgImage)
+            if !pageText.isEmpty {
+                if i > 0 { fullText += "\n\n--- Page \(i + 1) ---\n\n" }
+                fullText += pageText
+            }
+        }
+        
+        await MainActor.run {
+            self.recognizedText = fullText
+            self.scannedPageCount = validCount
+            self.isProcessingOCR = false
+            if scanMode == .newBook {
+                if let firstLine = fullText.components(separatedBy: .newlines).first(where: { $0.count > 3 && $0.count < 60 }) {
+                    self.bookTitle = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+        }
+    }
+    #endif
+
     private func performOCR(on cgImage: CGImage) async -> String {
         return await withCheckedContinuation { continuation in
             let request = VNRecognizeTextRequest { req, error in

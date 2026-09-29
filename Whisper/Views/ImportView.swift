@@ -364,6 +364,11 @@ struct ImportView: View {
                     subtitle: "Lightweight reading with zero distractions and full font controls",
                     icon: "text.quote"
                 )
+                formatRow(
+                    title: "Audiobooks (.m4b, .mp3, .m4a, .aac)",
+                    subtitle: "Ambient soundwave player, sleep timer, chapters, and lock screen controls",
+                    icon: "headphones"
+                )
             }
         }
     }

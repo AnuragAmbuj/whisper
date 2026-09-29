@@ -51,6 +51,7 @@ final class AudiobookPlayerService {
     
     init() {
         configureAudioSession()
+        setupRemoteCommands()
     }
     
     deinit {
@@ -292,6 +293,62 @@ final class AudiobookPlayerService {
         self.currentChapterIndex = 0
     }
     
+
+    // MARK: - Remote Command Center (Lock Screen & Control Center)
+    
+    private func setupRemoteCommands() {
+        #if canImport(MediaPlayer)
+        let commandCenter = MPRemoteCommandCenter.shared()
+        
+        commandCenter.playCommand.isEnabled = true
+        commandCenter.playCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .commandFailed }
+            self.play()
+            return .success
+        }
+        
+        commandCenter.pauseCommand.isEnabled = true
+        commandCenter.pauseCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .commandFailed }
+            self.pause()
+            return .success
+        }
+        
+        commandCenter.togglePlayPauseCommand.isEnabled = true
+        commandCenter.togglePlayPauseCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .commandFailed }
+            self.togglePlayPause()
+            return .success
+        }
+        
+        commandCenter.skipForwardCommand.isEnabled = true
+        commandCenter.skipForwardCommand.preferredIntervals = [15]
+        commandCenter.skipForwardCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .commandFailed }
+            self.skipForward(15)
+            return .success
+        }
+        
+        commandCenter.skipBackwardCommand.isEnabled = true
+        commandCenter.skipBackwardCommand.preferredIntervals = [15]
+        commandCenter.skipBackwardCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .commandFailed }
+            self.skipBackward(15)
+            return .success
+        }
+        
+        commandCenter.changePlaybackPositionCommand.isEnabled = true
+        commandCenter.changePlaybackPositionCommand.addTarget { [weak self] event in
+            guard let self = self,
+                  let positionEvent = event as? MPChangePlaybackPositionCommandEvent else {
+                return .commandFailed
+            }
+            self.seek(to: positionEvent.positionTime)
+            return .success
+        }
+        #endif
+    }
+
     // MARK: - Now Playing Info Center
     
     private func updateNowPlaying() {
@@ -303,6 +360,13 @@ final class AudiobookPlayerService {
         nowPlayingInfo[MPMediaItemPropertyPlaybackDuration] = duration
         nowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
         nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? Double(playbackRate) : 0.0
+        
+        #if os(iOS)
+        if !book.coverImageName.isEmpty,
+           let uiImage = UIImage(named: book.coverImageName) ?? UIImage(contentsOfFile: book.coverImageName) {
+            nowPlayingInfo[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: uiImage.size) { _ in uiImage }
+        }
+        #endif
         
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
         #endif
