@@ -313,6 +313,75 @@ final class Book {
     return "\(title) by \(author)"
   }
 
+  /// Resolves content for a specific chapter or page/section of the book
+  func resolveSectionContent(chapterPath: String? = nil, pageIndex: Int = 0) -> (title: String, content: String) {
+    if let path = chapterPath, format == .epub, let dir = bookDir {
+      let fullURL = dir.appendingPathComponent(path)
+      if let html = try? String(contentsOf: fullURL, encoding: .utf8) {
+        let stripped = html
+          .replacingOccurrences(of: "<style[\\s\\S]*?</style>", with: "", options: .regularExpression)
+          .replacingOccurrences(of: "<script[\\s\\S]*?</script>", with: "", options: .regularExpression)
+          .replacingOccurrences(of: "<[^>]+>", with: "\n", options: .regularExpression)
+          .replacingOccurrences(of: "&nbsp;", with: " ")
+          .replacingOccurrences(of: "&quot;", with: "\"")
+          .replacingOccurrences(of: "&apos;", with: "'")
+          .replacingOccurrences(of: "&amp;", with: "&")
+          .replacingOccurrences(of: "&lt;", with: "<")
+          .replacingOccurrences(of: "&gt;", with: ">")
+        let lines = stripped.components(separatedBy: .newlines)
+          .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+          .filter { $0.count > 15 }
+        if !lines.isEmpty {
+          let cleanTitle = path.components(separatedBy: "/").last?
+            .replacingOccurrences(of: ".html", with: "")
+            .replacingOccurrences(of: ".xhtml", with: "")
+            .capitalized ?? "Current Chapter"
+          return (cleanTitle, lines.joined(separator: "\n\n"))
+        }
+      }
+    }
+    
+    // Comic: extract page dialogue
+    if format == .comic, let dir = bookDir {
+      let ocrURL = dir.appendingPathComponent("ocr_transcript.txt")
+      if let transcript = try? String(contentsOf: ocrURL, encoding: .utf8) {
+        let pageHeader = "[Page \(pageIndex + 1)]"
+        if let range = transcript.range(of: pageHeader) {
+          let rest = transcript[range.lowerBound...]
+          let nextPageHeader = "[Page \(pageIndex + 2)]"
+          let pageText: String
+          if let nextRange = rest.range(of: nextPageHeader) {
+            pageText = String(rest[..<nextRange.lowerBound])
+          } else {
+            pageText = String(rest)
+          }
+          if !pageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return ("Page \(pageIndex + 1)", pageText)
+          }
+        }
+      }
+    }
+    
+    // PDF: extract specific page
+    if format == .pdf, let pdfURL = resolvedURL {
+      #if canImport(PDFKit)
+      if let doc = PDFDocument(url: pdfURL), let page = doc.page(at: pageIndex),
+         let text = page.string?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+        return ("Page \(pageIndex + 1)", text)
+      }
+      #endif
+    }
+    
+    // Audiobook
+    if format == .audiobook {
+      return (title, resolveSearchableContent())
+    }
+    
+    // Default fallback to full content
+    let full = resolveSearchableContent()
+    return (title, full)
+  }
+
   /// Deletes all files associated with this book (EPUB directory, cover image)
   func cleanupFiles() {
     let fileManager = FileManager.default

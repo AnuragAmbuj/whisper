@@ -358,7 +358,11 @@ struct ReaderView: View {
       }
     }
     .sheet(isPresented: $showAIInsights) {
-      AIReaderInsightsSheet(book: viewModel.book)
+      AIReaderInsightsSheet(
+        book: viewModel.book,
+        currentChapterPath: currentChapterPath,
+        currentPageIndex: pageIndex
+      )
     }
     .onReceive(NotificationCenter.default.publisher(for: .whisperToggleBookmark)) { _ in
       viewModel.toggleBookmark()
